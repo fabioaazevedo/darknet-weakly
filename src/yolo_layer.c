@@ -177,6 +177,8 @@ ious delta_yolo_box(box truth, float *x, float *biases, int n, int index, int i,
         (*rewritten_bbox)++;
     }
 
+
+
     ious all_ious = { 0 };
     // i - step in layer width
     // j - step in layer height
@@ -186,6 +188,37 @@ ious delta_yolo_box(box truth, float *x, float *biases, int n, int index, int i,
     all_ious.giou = box_giou(pred, truth);
     all_ious.diou = box_diou(pred, truth);
     all_ious.ciou = box_ciou(pred, truth);
+
+//    printf("\n\n\n\n\nVALUES %f %f %f %f %f %f %f %f %f %d\n", truth.x, truth.y, pred.x, pred.y, truth.w, truth.h, pred.w, pred.h, all_ious.iou, iou_loss);
+
+//    if(all_ious.iou > 2*FLT_EPSILON) {
+    if(1) {
+        float covpredw  = (pred.w/4.0f) * (pred.w/4.0f);
+        float covtruthw = (truth.w/4.0f)*(truth.w/4.0f);
+        float covpredh  = (pred.h/4.0f) * (pred.h/4.0f);
+        float covtruthh = (truth.h/4.0f)*(truth.h/4.0f);
+
+        float kldiv1 = log(covtruthw/covpredw);
+        kldiv1 -= 1;
+        kldiv1 += (pred.x-truth.x)*(pred.x-truth.x)/covtruthw;
+        kldiv1 += covpredw/covtruthw;
+        kldiv1 /= 2;
+
+        float kldiv2 = log(covtruthh/covpredh);
+        kldiv2 -= 1;
+        kldiv2 += (pred.y-truth.y)*(pred.y-truth.y)/covtruthh;
+        kldiv2 += covpredh/covtruthh;
+        kldiv2 /= 2;
+
+        float kldiv = kldiv1 + kldiv2;
+
+//        printf("VALUES %f %f %f \n\n\n\n\n", kldiv1, kldiv2, kldiv);
+
+        all_ious.ciou = kldiv;
+//        if (all_ious.iou < 0.0f)
+//            all_ious.iou = 0.0f;
+    }
+
     // avoid nan in dx_box_iou
     if (pred.w == 0) { pred.w = 1.0; }
     if (pred.h == 0) { pred.h = 1.0; }
@@ -554,7 +587,9 @@ void *process_batch(void* ptr)
 
                 // range is 0 <= 1
                 args->tot_iou += all_ious.iou;
-                args->tot_iou_loss += 1 - all_ious.iou;
+//                args->tot_iou_loss += 1 - all_ious.iou;
+                args->tot_iou_loss += all_ious.ciou;
+
                 // range is -1 <= giou <= 1
                 tot_giou += all_ious.giou;
                 args->tot_giou_loss += 1 - all_ious.giou;
@@ -606,7 +641,8 @@ void *process_batch(void* ptr)
 
                         // range is 0 <= 1
                         args->tot_iou += all_ious.iou;
-                        args->tot_iou_loss += 1 - all_ious.iou;
+//                        args->tot_iou_loss += 1 - all_ious.iou;
+                        args->tot_iou_loss += all_ious.ciou;
                         // range is -1 <= giou <= 1
                         tot_giou += all_ious.giou;
                         args->tot_giou_loss += 1 - all_ious.giou;
@@ -900,7 +936,13 @@ void forward_yolo_layer(const layer l, network_state state)
 
         // gIOU loss + MSE (objectness) loss
         if (l.iou_loss == MSE) {
-            *(l.cost) = pow(mag_array(l.delta, l.outputs * l.batch), 2);
+//            *(l.cost) = pow(mag_array(l.delta, l.outputs * l.batch), 2);
+
+            ///////ADDED
+            avg_iou_loss = count > 0 ? l.iou_normalizer * (tot_iou_loss / count) : 0;
+            *(l.cost) = avg_iou_loss + classification_loss;
+//            fprintf(stderr, "\n\n\nLOSS HERE\n\n\n\n");
+            ///////
         }
         else {
             // Always compute classification loss both for iou + cls loss and for logging with mse loss

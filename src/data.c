@@ -625,7 +625,7 @@ matrix load_labels_paths(char **paths, int n, char **labels, int k, tree *hierar
         for (i = 0; i < n; ++i) {
             const int img_index = (contrastive) ? (i / 2) : i;
             fill_truth_smooth(paths[img_index], labels, k, y.vals[i], label_smooth_eps);
-            //printf(" n = %d, i = %d, img_index = %d, class_id = %d \n", n, i, img_index, find_max(y.vals[i], k));
+            printf(" n = %d, i = %d, img_index = %d, class_id = %d \n", n, i, img_index, find_max(y.vals[i], k));
             if (hierarchy) {
                 fill_hierarchy(y.vals[i], k, hierarchy);
             }
@@ -2069,6 +2069,7 @@ data load_categorical_data_csv(char *filename, int target, int k)
     d.X = X;
     d.y = y;
     free(truth_1d);
+
     return d;
 }
 
