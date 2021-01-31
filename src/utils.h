@@ -17,6 +17,10 @@ extern "C" {
 LIB_API void free_ptrs(void **ptrs, int n);
 LIB_API void top_k(float *a, int n, int k, int *index);
 
+double rand_gen();
+double normalRandom(double Mi, double sigma);
+
+
 void *xmalloc(size_t size);
 void *xcalloc(size_t nmemb, size_t size);
 void *xrealloc(void *ptr, size_t size);

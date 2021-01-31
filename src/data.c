@@ -227,6 +227,27 @@ box_label *read_boxes(char *filename, int *n)
         boxes[count].id = id;
         boxes[count].x = x;
         boxes[count].y = y;
+
+        if((h < 0.001) && (w < 0.001) && (x > 0.001) && (y > 0.001))
+        {
+            float w_mean  = rand_uniform(0.0,1.0) < 0.77 ? 0.0458 : 0.0650;
+            float w_sigma = rand_uniform(0.0,1.0) < 0.77 ? 0.0082 : 0.0174;
+
+            float h_mean  = rand_uniform(0.0,1.0) < 0.83 ? 0.0563 : 0.0750;
+            float h_sigma = rand_uniform(0.0,1.0) < 0.83 ? 0.0086 : 0.0231;
+
+            float aw = normalRandom(w_mean, w_sigma);
+            float ah = normalRandom(h_mean, h_sigma);
+
+            if((aw > 0.0f) && (ah > 0.0f))
+            {
+                w = aw;
+                h = ah;
+            }
+
+            printf("VALUE RAND: %f %f %s\n", w,h, filename);
+        }
+
         boxes[count].h = h;
         boxes[count].w = w;
         boxes[count].left   = x - w/2;
@@ -234,6 +255,7 @@ box_label *read_boxes(char *filename, int *n)
         boxes[count].top    = y - h/2;
         boxes[count].bottom = y + h/2;
         ++count;
+
     }
     fclose(file);
     *n = count;
@@ -1575,12 +1597,15 @@ data load_data_detection(int n, char **paths, int m, int w, int h, int c, int bo
 
 void *load_thread(void *ptr)
 {
+
     //srand(time(0));
     //printf("Loading data: %d\n", random_gen());
     load_args a = *(struct load_args*)ptr;
     if(a.exposure == 0) a.exposure = 1;
     if(a.saturation == 0) a.saturation = 1;
     if(a.aspect == 0) a.aspect = 1;
+
+//    printf("\n\nTYPE: %d\n", a.type);
 
     if (a.type == OLD_CLASSIFICATION_DATA){
         *a.d = load_data_old(a.paths, a.n, a.m, a.labels, a.classes, a.w, a.h);

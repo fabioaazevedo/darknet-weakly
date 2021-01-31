@@ -177,44 +177,65 @@ ious delta_yolo_box(box truth, float *x, float *biases, int n, int index, int i,
         (*rewritten_bbox)++;
     }
 
+    box ltruth;
+    ltruth.x = truth.x;
+    ltruth.y = truth.y;
+    ltruth.w = truth.w;
+    ltruth.h = truth.h;
 
+//    printf("\n\nPOINT HERE2 %f %f\n\n", truth.w, truth.h);
+
+//    printf("W: %f H: %f\n", truth.w, truth.h);
+
+    if ((truth.h < 0.0002) && (truth.w < 0.0002)){
+        ltruth.h = 0.06;
+        ltruth.w = 0.051;
+
+        printf("\n\nPOINT HERE %f %f\n\n", truth.w, truth.h);
+    }
 
     ious all_ious = { 0 };
     // i - step in layer width
     // j - step in layer height
     //  Returns a box in absolute coordinates
     box pred = get_yolo_box(x, biases, n, index, i, j, lw, lh, w, h, stride, new_coords);
-    all_ious.iou = box_iou(pred, truth);
-    all_ious.giou = box_giou(pred, truth);
-    all_ious.diou = box_diou(pred, truth);
-    all_ious.ciou = box_ciou(pred, truth);
+    all_ious.iou = box_iou(pred, ltruth);
+    all_ious.giou = box_giou(pred, ltruth);
+    all_ious.diou = box_diou(pred, ltruth);
+    all_ious.ciou = box_ciou(pred, ltruth);
 
 //    printf("\n\n\n\n\nVALUES %f %f %f %f %f %f %f %f %f %d\n", truth.x, truth.y, pred.x, pred.y, truth.w, truth.h, pred.w, pred.h, all_ious.iou, iou_loss);
 
 //    if(all_ious.iou > 2*FLT_EPSILON) {
     if(1) {
-        float covpredw  = (pred.w/4.0f) * (pred.w/4.0f);
-        float covtruthw = (truth.w/4.0f)*(truth.w/4.0f);
-        float covpredh  = (pred.h/4.0f) * (pred.h/4.0f);
-        float covtruthh = (truth.h/4.0f)*(truth.h/4.0f);
 
-        float kldiv1 = log(covtruthw/covpredw);
+//        float covpredw  = (pred.w/4.0f)*(pred.w/4.0f);
+//        float covtruthw = (truth.w/4.0f)*(truth.w/4.0f);
+//        float covpredh  = (pred.h/4.0f)*(pred.h/4.0f);
+//        float covtruthh = (truth.h/4.0f)*(truth.h/4.0f);
+
+        double covpredw  = (pred.w*pred.w)/16.0;
+        double covtruthw = (truth.w*truth.w)/16.0;
+        double covpredh  = (pred.h*pred.h)/16.0;
+        double covtruthh = (truth.h*truth.h)/16.0;
+
+        double kldiv1 = log(covtruthw+FLT_EPSILON) - log(covpredw+FLT_EPSILON);//log(covtruthw/covpredw);
         kldiv1 -= 1;
-        kldiv1 += (pred.x-truth.x)*(pred.x-truth.x)/covtruthw;
-        kldiv1 += covpredw/covtruthw;
+        kldiv1 += (pred.x-truth.x)*(pred.x-truth.x)/(covtruthw+FLT_EPSILON);
+        kldiv1 += covpredw/(covtruthw+FLT_EPSILON);
         kldiv1 /= 2;
 
-        float kldiv2 = log(covtruthh/covpredh);
+        double kldiv2 = log(covtruthh+FLT_EPSILON) - log(covpredh+FLT_EPSILON);//log(covtruthh/covpredh);
         kldiv2 -= 1;
-        kldiv2 += (pred.y-truth.y)*(pred.y-truth.y)/covtruthh;
-        kldiv2 += covpredh/covtruthh;
+        kldiv2 += (pred.y-truth.y)*(pred.y-truth.y)/(covtruthh+FLT_EPSILON);
+        kldiv2 += covpredh/(covtruthh+FLT_EPSILON);
         kldiv2 /= 2;
 
-        float kldiv = kldiv1 + kldiv2;
+        double kldiv = kldiv1 + kldiv2;
 
 //        printf("VALUES %f %f %f \n\n\n\n\n", kldiv1, kldiv2, kldiv);
 
-        all_ious.ciou = kldiv;
+        all_ious.ciou = (float)kldiv;
 //        if (all_ious.iou < 0.0f)
 //            all_ious.iou = 0.0f;
     }
@@ -900,8 +921,8 @@ void forward_yolo_layer(const layer l, network_state state)
 
         loss /= l.batch;
 
-        fprintf(stderr, "v3 (%s loss, Normalizer: (iou: %.2f, obj: %.2f, cls: %.2f) Region %d Avg (IOU: %f), count: %d, total_loss = %f \n",
-            (l.iou_loss == MSE ? "mse" : (l.iou_loss == GIOU ? "giou" : "iou")), l.iou_normalizer, l.obj_normalizer, l.cls_normalizer, state.index, tot_iou / count, count, loss);
+//        fprintf(stderr, "v3 (%s loss, Normalizer: (iou: %.2f, obj: %.2f, cls: %.2f) Region %d Avg (IOU: %f), count: %d, total_loss = %f \n",
+//            (l.iou_loss == MSE ? "mse" : (l.iou_loss == GIOU ? "giou" : "iou")), l.iou_normalizer, l.obj_normalizer, l.cls_normalizer, state.index, tot_iou / count, count, loss);
     }
     else {
         // show detailed output
@@ -962,8 +983,8 @@ void forward_yolo_layer(const layer l, network_state state)
         classification_loss /= l.batch;
         iou_loss /= l.batch;
 
-        fprintf(stderr, "v3 (%s loss, Normalizer: (iou: %.2f, obj: %.2f, cls: %.2f) Region %d Avg (IOU: %f), count: %d, class_loss = %f, iou_loss = %f, total_loss = %f \n",
-            (l.iou_loss == MSE ? "mse" : (l.iou_loss == GIOU ? "giou" : "iou")), l.iou_normalizer, l.obj_normalizer, l.cls_normalizer, state.index, tot_iou / count, count, classification_loss, iou_loss, loss);
+//        fprintf(stderr, "v3 (%s loss, Normalizer: (iou: %.2f, obj: %.2f, cls: %.2f) Region %d Avg (IOU: %f), count: %d, class_loss = %f, iou_loss = %f, total_loss = %f \n",
+//            (l.iou_loss == MSE ? "mse" : (l.iou_loss == GIOU ? "giou" : "iou")), l.iou_normalizer, l.obj_normalizer, l.cls_normalizer, state.index, tot_iou / count, count, classification_loss, iou_loss, loss);
 
         //fprintf(stderr, "v3 (%s loss, Normalizer: (iou: %.2f, cls: %.2f) Region %d Avg (IOU: %f, GIOU: %f), Class: %f, Obj: %f, No Obj: %f, .5R: %f, .75R: %f, count: %d, class_loss = %f, iou_loss = %f, total_loss = %f \n",
         //    (l.iou_loss == MSE ? "mse" : (l.iou_loss == GIOU ? "giou" : "iou")), l.iou_normalizer, l.obj_normalizer, state.index, tot_iou / count, tot_giou / count, avg_cat / class_count, avg_obj / count, avg_anyobj / (l.w*l.h*l.n*l.batch), recall / count, recall75 / count, count,

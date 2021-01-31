@@ -25,6 +25,18 @@
 #pragma warning(disable: 4996)
 #endif
 
+
+double rand_gen() {
+   // return a uniformly distributed random value
+   return ( (double)(rand()) + 1. )/( (double)(RAND_MAX) + 1. );
+}
+double normalRandom(double Mi, double sigma) {
+   // return a normally distributed random value
+   double v1=rand_gen();
+   double v2=rand_gen();
+   return Mi + sigma * (cos(2*M_PI*v2)*sqrt(-2.*log(v1)));
+}
+
 void *xmalloc(size_t size) {
     void *ptr=malloc(size);
     if(!ptr) {

@@ -146,6 +146,8 @@ void train_detector(char *datacfg, char *cfgfile, char *weightfile, int *gpus, i
     args.type = DETECTION_DATA;
     args.threads = 64;    // 16 or 64
 
+    printf("\n\n\n\nTRAIN IMAGES: %d\n\n\n", train_images_num);
+
     args.angle = net.angle;
     args.gaussian_noise = net.gaussian_noise;
     args.blur = net.blur;
@@ -888,6 +890,7 @@ void validate_detector_recall(char *datacfg, char *cfgfile, char *weightfile)
         for (j = 0; j < num_labels; ++j) {
             ++total;
             box t = { truth[j].x, truth[j].y, truth[j].w, truth[j].h };
+            printf("DOING VALIDATION!\n\n");
             float best_iou = 0;
             for (k = 0; k < nboxes; ++k) {
                 float iou = box_iou(dets[k].bbox, t);
