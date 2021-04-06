@@ -221,40 +221,67 @@ box_label *read_boxes(char *filename, int *n)
     int id;
     int count = 0;
     while(fscanf(file, "%d %f %f %f %f", &id, &x, &y, &w, &h) == 5){
-        boxes = (box_label*)xrealloc(boxes, (count + 1) * sizeof(box_label));
-        boxes[count].track_id = count + img_hash;
-        //printf(" boxes[count].track_id = %d, count = %d \n", boxes[count].track_id, count);
-        boxes[count].id = id;
-        boxes[count].x = x;
-        boxes[count].y = y;
 
         if((h < 0.001) && (w < 0.001) && (x > 0.001) && (y > 0.001))
         {
-            float w_mean  = rand_uniform(0.0,1.0) < 0.77 ? 0.0458 : 0.0650;
-            float w_sigma = rand_uniform(0.0,1.0) < 0.77 ? 0.0082 : 0.0174;
+//            for (int k = 0; k < 3; k++){
+            for (int k = 0; k < 5; k++){
 
-            float h_mean  = rand_uniform(0.0,1.0) < 0.83 ? 0.0563 : 0.0750;
-            float h_sigma = rand_uniform(0.0,1.0) < 0.83 ? 0.0086 : 0.0231;
+                float w_mean  = rand_uniform(0.0,1.0) < 0.77 ? 0.0458 : 0.0650;
+                float w_sigma = rand_uniform(0.0,1.0) < 0.77 ? 0.0082 : 0.0174;
 
-            float aw = normalRandom(w_mean, w_sigma);
-            float ah = normalRandom(h_mean, h_sigma);
+                float h_mean  = rand_uniform(0.0,1.0) < 0.83 ? 0.0563 : 0.0750;
+                float h_sigma = rand_uniform(0.0,1.0) < 0.83 ? 0.0086 : 0.0231;
 
-            if((aw > 0.0f) && (ah > 0.0f))
-            {
-                w = aw;
-                h = ah;
+                float aw = normalRandom(w_mean, w_sigma);
+                float ah = normalRandom(h_mean, h_sigma);
+
+                if((aw > 0.001f) && (ah > 0.001f))
+                {
+                    w = aw;
+                    h = ah;
+                }
+                else {
+                    h = 0.0563;
+                    w = 0.0458;
+                }
+
+                printf("VALUE RAND: %f %f %f %f %s\n", x,y, w,h, filename);
+
+                boxes = (box_label*)xrealloc(boxes, (count + 1) * sizeof(box_label));
+                boxes[count].track_id = count + img_hash;
+                //printf(" boxes[count].track_id = %d, count = %d \n", boxes[count].track_id, count);
+                boxes[count].id = id;
+                boxes[count].x = x;
+                boxes[count].y = y;
+
+                boxes[count].h = h;
+                boxes[count].w = w;
+                boxes[count].left   = x - w/2;
+                boxes[count].right  = x + w/2;
+                boxes[count].top    = y - h/2;
+                boxes[count].bottom = y + h/2;
+                ++count;
+
+
             }
-
-            printf("VALUE RAND: %f %f %s\n", w,h, filename);
         }
+        else {
+            boxes = (box_label*)xrealloc(boxes, (count + 1) * sizeof(box_label));
+            boxes[count].track_id = count + img_hash;
+            //printf(" boxes[count].track_id = %d, count = %d \n", boxes[count].track_id, count);
+            boxes[count].id = id;
+            boxes[count].x = x;
+            boxes[count].y = y;
 
-        boxes[count].h = h;
-        boxes[count].w = w;
-        boxes[count].left   = x - w/2;
-        boxes[count].right  = x + w/2;
-        boxes[count].top    = y - h/2;
-        boxes[count].bottom = y + h/2;
-        ++count;
+            boxes[count].h = h;
+            boxes[count].w = w;
+            boxes[count].left   = x - w/2;
+            boxes[count].right  = x + w/2;
+            boxes[count].top    = y - h/2;
+            boxes[count].bottom = y + h/2;
+            ++count;
+        }
 
     }
     fclose(file);
@@ -408,7 +435,8 @@ int fill_truth_detection(const char *path, int num_boxes, int truth_size, float 
     int min_w_h = 0;
     float lowest_w = 1.F / net_w;
     float lowest_h = 1.F / net_h;
-    randomize_boxes(boxes, count);
+// COMMENTED
+//    randomize_boxes(boxes, count);
     correct_boxes(boxes, count, dx, dy, sx, sy, flip);
     if (count > num_boxes) count = num_boxes;
     float x, y, w, h;

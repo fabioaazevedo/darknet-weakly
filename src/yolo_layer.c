@@ -171,7 +171,7 @@ static inline float clip_value(float val, const float max_val)
     return val;
 }
 
-ious delta_yolo_box(box truth, float *x, float *biases, int n, int index, int i, int j, int lw, int lh, int w, int h, float *delta, float scale, int stride, float iou_normalizer, IOU_LOSS iou_loss, int accumulate, float max_delta, int *rewritten_bbox, int new_coords)
+ious delta_yolo_box(int update_delta, box truth, float *x, float *biases, int n, int index, int i, int j, int lw, int lh, int w, int h, float *delta, float scale, int stride, float iou_normalizer, IOU_LOSS iou_loss, int accumulate, float max_delta, int *rewritten_bbox, int new_coords)
 {
     if (delta[index + 0 * stride] || delta[index + 1 * stride] || delta[index + 2 * stride] || delta[index + 3 * stride]) {
         (*rewritten_bbox)++;
@@ -187,12 +187,12 @@ ious delta_yolo_box(box truth, float *x, float *biases, int n, int index, int i,
 
 //    printf("W: %f H: %f\n", truth.w, truth.h);
 
-    if ((truth.h < 0.0002) && (truth.w < 0.0002)){
-        ltruth.h = 0.06;
-        ltruth.w = 0.051;
+//    if ((truth.h < 0.0002) && (truth.w < 0.0002)){
+//        ltruth.h = 0.06;
+//        ltruth.w = 0.051;
 
-        printf("\n\nPOINT HERE %f %f\n\n", truth.w, truth.h);
-    }
+//        printf("\n\nPOINT HERE %f %f\n\n", truth.w, truth.h);
+//    }
 
     ious all_ious = { 0 };
     // i - step in layer width
@@ -206,6 +206,8 @@ ious delta_yolo_box(box truth, float *x, float *biases, int n, int index, int i,
 
 //    printf("\n\n\n\n\nVALUES %f %f %f %f %f %f %f %f %f %d\n", truth.x, truth.y, pred.x, pred.y, truth.w, truth.h, pred.w, pred.h, all_ious.iou, iou_loss);
 
+    all_ious.ciou = 1000;
+
 //    if(all_ious.iou > 2*FLT_EPSILON) {
     if(1) {
 
@@ -214,36 +216,195 @@ ious delta_yolo_box(box truth, float *x, float *biases, int n, int index, int i,
 //        float covpredh  = (pred.h/4.0f)*(pred.h/4.0f);
 //        float covtruthh = (truth.h/4.0f)*(truth.h/4.0f);
 
+        // avoid nan in dx_box_iou
+        if (pred.w < 2*FLT_EPSILON) { pred.w = 1.0; }
+        if (pred.h < 2*FLT_EPSILON) { pred.h = 1.0; }
+
         double covpredw  = (pred.w*pred.w)/16.0;
         double covtruthw = (truth.w*truth.w)/16.0;
         double covpredh  = (pred.h*pred.h)/16.0;
         double covtruthh = (truth.h*truth.h)/16.0;
 
-        double kldiv1 = log(covtruthw+FLT_EPSILON) - log(covpredw+FLT_EPSILON);//log(covtruthw/covpredw);
+//        printf("COVPW: %f\n", pred.w/4.0);
+//        printf("COVPH: %f\n", pred.h/4.0);
+//        printf("COVTW: %f\n", truth.w/4.0);
+//        printf("COVTH: %f\n", truth.h/4.0);
+
+//        printf("PX: %f\n", pred.x);
+//        printf("PY: %f\n", pred.y);
+//        printf("TX: %f\n", truth.x);
+//        printf("TY: %f\n", truth.y);
+
+        box medbox;
+        medbox.x = (pred.x + truth.x)/2.0;
+        medbox.y = (pred.y + truth.y)/2.0;
+
+        double covmedw = (covpredw + covtruthw)/2.0;
+        double covmedh = (covpredh + covtruthh)/2.0;
+
+
+        ////// KL LOSSSSS
+//        double kldiv1 = log(covtruthw/(covpredw+FLT_EPSILON));//log(covtruthw/covpredw);
+        float kldiv1 = log((truth.w*truth.w)/((pred.w*pred.w)+FLT_EPSILON));
         kldiv1 -= 1;
         kldiv1 += (pred.x-truth.x)*(pred.x-truth.x)/(covtruthw+FLT_EPSILON);
-        kldiv1 += covpredw/(covtruthw+FLT_EPSILON);
+        kldiv1 += (pred.w*pred.w)/((truth.w*truth.w)+FLT_EPSILON);
         kldiv1 /= 2;
 
-        double kldiv2 = log(covtruthh+FLT_EPSILON) - log(covpredh+FLT_EPSILON);//log(covtruthh/covpredh);
+        if ((kldiv1 > 500) || isnan(kldiv1) || isinf(kldiv1)){
+            kldiv1 = 500;
+            printf("BAD VALUES KL1: %f\n", kldiv1);
+            printf("TRUTH: %f %f %f %f\nPRED: %f %f %f %f", truth.x, truth.y, truth.w, truth.h, pred.x, pred.y, pred.w, pred.h);
+
+        }
+
+        float kldiv2 = log((truth.h*truth.h)/((pred.h*pred.h)+FLT_EPSILON));//log(covtruthh/covpredh);
         kldiv2 -= 1;
         kldiv2 += (pred.y-truth.y)*(pred.y-truth.y)/(covtruthh+FLT_EPSILON);
-        kldiv2 += covpredh/(covtruthh+FLT_EPSILON);
+        kldiv2 += (pred.h*pred.h)/((truth.h*truth.h)+FLT_EPSILON);
         kldiv2 /= 2;
 
-        double kldiv = kldiv1 + kldiv2;
+        if ((kldiv2 > 500) || isnan(kldiv2) || isinf(kldiv2)){
+            kldiv2 = 500;
+            printf("BAD VALUES KL2: %f\n", kldiv2);
+            printf("TRUTH: %f %f %f %f\nPRED: %f %f %f %f", truth.x, truth.y, truth.w, truth.h, pred.x, pred.y, pred.w, pred.h);
 
-//        printf("VALUES %f %f %f \n\n\n\n\n", kldiv1, kldiv2, kldiv);
+        }
+        double kldiv = kldiv1 + kldiv2;
+        ////// KL LOSSSSS
+
+//        kldiv1 = log(covpredw+FLT_EPSILON) - log(covtruthw+FLT_EPSILON);//log(covtruthw/covpredw);
+//        kldiv1 -= 1;        kldiv /= 2;
+
+//        kldiv1 += (truth.x-pred.x)*(truth.x-pred.x)/(covpredw+FLT_EPSILON);
+//        kldiv1 += covtruthw/(covpredw+FLT_EPSILON);
+//        kldiv1 /= 2;
+
+//        kldiv2 = log(covpredh+FLT_EPSILON) - log(covtruthh+FLT_EPSILON);//log(covtruthh/covpredh);
+//        kldiv2 -= 1;
+//        kldiv2 += (truth.y-pred.y)*(truth.y-pred.y)/(covpredh+FLT_EPSILON);
+//        kldiv2 += covtruthh/(covpredh+FLT_EPSILON);
+//        kldiv2 /= 2;
+
+//        kldiv += kldiv1 + kldiv2;
+//        kldiv /= 2;
+
+
+        ////// JS LOSSSSS
+//        double kldiv1 = log(covmedw/(covpredw+FLT_EPSILON));//log(covtruthw/covpredw);
+//        kldiv1 -= 1;
+//        kldiv1 += (pred.x-medbox.x)*(pred.x-medbox.x)/(covmedw+FLT_EPSILON);
+//        kldiv1 += covpredw/(covmedw+FLT_EPSILON);
+//        kldiv1 /= 2;
+
+//        if ((kldiv1 > 500) || isnan(kldiv1) || isinf(kldiv1)){
+//            kldiv1 = 500;
+//            printf("BAD VALUES KL1: %f\n", kldiv1);
+//            printf("TRUTH: %f %f %f %f\nPRED: %f %f %f %f", truth.x, truth.y, truth.w, truth.h, pred.x, pred.y, pred.w, pred.h);
+
+//        }
+
+//        double kldiv2 = log(covmedh/(covpredh+FLT_EPSILON));//log(covtruthh/covpredh);
+//        kldiv2 -= 1;
+//        kldiv2 += (pred.y-medbox.y)*(pred.y-medbox.y)/(covmedh+FLT_EPSILON);
+//        kldiv2 += covpredh/(covmedh+FLT_EPSILON);
+//        kldiv2 /= 2;
+
+//        if ((kldiv2 > 500) || isnan(kldiv2) || isinf(kldiv2)){
+//            kldiv2 = 500;
+//            printf("BAD VALUES KL2: %f\n", kldiv2);
+//            printf("TRUTH: %f %f %f %f\nPRED: %f %f %f %f", truth.x, truth.y, truth.w, truth.h, pred.x, pred.y, pred.w, pred.h);
+
+//        }
+
+//        kldiv1 = fmax(0.0, kldiv1);
+//        kldiv2 = fmax(0.0, kldiv2);
+
+//        double kldiv = kldiv1 + kldiv2;
+////        double kldiv = 1 - exp(-3*(kldiv1 + kldiv2));
+////        double kldiv = 1 - exp(-(kldiv1 + kldiv2));
+
+//        kldiv1 = log(covmedw/(covtruthw+FLT_EPSILON));//log(covtruthw/covpredw);
+//        kldiv1 -= 1;
+//        kldiv1 += (truth.x-medbox.x)*(truth.x-medbox.x)/(covmedw+FLT_EPSILON);
+//        kldiv1 += covtruthw/(covmedw+FLT_EPSILON);
+//        kldiv1 /= 2;
+
+//        if ((kldiv1 > 500) || isnan(kldiv1) || isinf(kldiv1)){
+//            kldiv1 = 500;
+//            printf("BAD VALUES KL1: %f\n", kldiv1);
+//            printf("TRUTH: %f %f %f %f\nPRED: %f %f %f %f", truth.x, truth.y, truth.w, truth.h, pred.x, pred.y, pred.w, pred.h);
+
+//        }
+
+//        kldiv2 = log(covmedh/(covtruthh+FLT_EPSILON));//log(covtruthh/covpredh);
+//        kldiv2 -= 1;
+//        kldiv2 += (truth.y-medbox.y)*(truth.y-medbox.y)/(covmedh+FLT_EPSILON);
+//        kldiv2 += covtruthh/(covmedh+FLT_EPSILON);
+//        kldiv2 /= 2;
+
+//        if ((kldiv2 > 500) || isnan(kldiv2) || isinf(kldiv2)){
+//            kldiv2 = 500;
+//            printf("BAD VALUES KL2: %f\n", kldiv2);
+//            printf("TRUTH: %f %f %f %f\nPRED: %f %f %f %f", truth.x, truth.y, truth.w, truth.h, pred.x, pred.y, pred.w, pred.h);
+
+//        }
+
+//        kldiv1 = fmax(0.0, kldiv1);
+//        kldiv2 = fmax(0.0, kldiv2);
+
+//        kldiv += kldiv1 + kldiv2;
+////        kldiv += 1 - exp(-3*(kldiv1 + kldiv2));
+
+////        kldiv = sqrt(kldiv/2.0);
+//        kldiv /= log(2);
+//        kldiv = sqrtf(kldiv/2.0);
+    ////// JS LOSSSSS
+
+
+        if (kldiv > FLT_MAX)
+            kldiv = FLT_MAX;
+
+        printf("VALUES KL DIV XW: %f YH: %f TOT: %f IOUL: %f UP: %d\n", kldiv1, kldiv2, kldiv, 1.0-all_ious.iou, update_delta);
+
 
         all_ious.ciou = (float)kldiv;
 //        if (all_ious.iou < 0.0f)
 //            all_ious.iou = 0.0f;
+
+
+//        float dx = 16*(truth.x - pred.x)/(truth.w*truth.w);
+//        float dy = 16*(truth.y - pred.y)/(truth.h*truth.h);
+//        float dw = 1/pred.w - pred.w/(truth.w*truth.w);
+//        float dh = 1/pred.h - pred.h/(truth.h*truth.h);
+
+//        dx *= iou_normalizer;
+//        dy *= iou_normalizer;
+//        dw *= iou_normalizer;
+//        dh *= iou_normalizer;
+
+//        if (!accumulate) {
+//            delta[index + 0 * stride] = 0;
+//            delta[index + 1 * stride] = 0;
+//            delta[index + 2 * stride] = 0;
+//            delta[index + 3 * stride] = 0;
+//        }
+
+//        // accumulate delta
+//        delta[index + 0 * stride] += dx;
+//        delta[index + 1 * stride] += dy;
+//        delta[index + 2 * stride] += dw;
+//        delta[index + 3 * stride] += dh;
     }
+
+    if (update_delta == 0)
+        return all_ious;
 
     // avoid nan in dx_box_iou
     if (pred.w == 0) { pred.w = 1.0; }
     if (pred.h == 0) { pred.h = 1.0; }
     if (iou_loss == MSE)    // old loss
+//    if(0)
     {
         float tx = (truth.x*lw - i);
         float ty = (truth.y*lh - j);
@@ -266,7 +427,7 @@ ious delta_yolo_box(box truth, float *x, float *biases, int n, int index, int i,
         delta[index + 2 * stride] += scale * (tw - x[index + 2 * stride]) * iou_normalizer;
         delta[index + 3 * stride] += scale * (th - x[index + 3 * stride]) * iou_normalizer;
     }
-    else {
+    else{
         // https://github.com/generalized-iou/g-darknet
         // https://arxiv.org/abs/1902.09630v2
         // https://giou.stanford.edu/
@@ -440,9 +601,50 @@ typedef struct train_yolo_args {
     int class_count;
 } train_yolo_args;
 
+void insert_organized(int **idx, float **loss, int value_idx, float value_loss, int nelem, int *number_valids)
+{
+//    printf("VALUE IDX: %d %d\n", value_idx, nelem);
+//    printf("VALUE LOSS: %f\n", value_loss);
+
+    *number_valids += (value_loss > 2*FLT_EPSILON);
+
+    int i = 0;
+    for (i = 0; i < nelem - 1; i++)
+    {
+      if ((value_loss > 2*FLT_EPSILON) && ((value_loss < *(*loss+i)) || (*(*loss+i) < 2*FLT_EPSILON))) //Organize only non-zero losses
+        {
+          float aux = *(*loss+i);
+          *(*loss+i) = value_loss;
+          value_loss = aux;
+
+          int aux_int = *(*idx+i);
+          *(*idx+i) = value_idx;
+          value_idx = aux_int;
+        }
+    }
+
+    if (nelem == 1){
+        *loss = (float *)malloc(nelem * sizeof (float));
+        *idx = (int *)malloc(nelem * sizeof (int));
+    }
+    else
+    {
+        *idx = realloc(*idx, nelem * sizeof (int));
+        *loss = realloc(*loss, nelem * sizeof (float));
+    }
+
+    *(*idx+i) = value_idx;
+    *(*loss+i) = value_loss;
+
+//    printf("VALUE IDX OUT: %d %d\n", *(*idx+i), nelem);
+//    printf("VALUE LOSS OUT: %f\n", value_loss);
+
+}
+
 void *process_batch(void* ptr)
 {
     {
+        srand(time(NULL));
         train_yolo_args *args = (train_yolo_args*)ptr;
         const layer l = args->l;
         network_state state = args->state;
@@ -553,15 +755,51 @@ void *process_batch(void* ptr)
                         const float class_multiplier = (l.classes_multipliers) ? l.classes_multipliers[class_id] : 1.0f;
                         if (l.objectness_smooth) l.delta[class_index + stride * class_id] = class_multiplier * (iou_multiplier - l.output[class_index + stride * class_id]);
                         box truth = float_to_box_stride(state.truth + best_t * l.truth_size + b * l.truths, 1);
-                        delta_yolo_box(truth, l.output, l.biases, l.mask[n], box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
+                        delta_yolo_box(1, truth, l.output, l.biases, l.mask[n], box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
                         (*state.net.total_bbox)++;
                     }
                 }
             }
         }
-        for (t = 0; t < l.max_boxes; ++t) {
+
+        float tx_ant=-1.0, ty_ant=-1.0, min_loss=0.0, acc_loss=0.0;
+        int skip_loss = 0;
+
+        unsigned int count = 0;
+        int* used_boxes = (int*)xcalloc(1, sizeof(int));
+
+//        used_boxes = (int*)xrealloc(used_boxes, (count + 1) * sizeof(int));
+
+        int box_idx = -1;
+        int min_box_idx = -1;
+
+        int first = 1, t_ant = 0;
+        int update_delta = 0;
+
+        int cnt = 0;
+        int final = 0;
+
+        t = 0;
+
+        int *idx_group = NULL;
+        float *loss_group = NULL;
+
+        int nelem_group = 1;
+        int n_valid = 0;
+
+//        for (t = 0; t < l.max_boxes; ++t) {
+        while(t < l.max_boxes){
             box truth = float_to_box_stride(state.truth + t * l.truth_size + b * l.truths, 1);
-            if (!truth.x) break;  // continue;
+            if (!truth.x)
+            {
+               t_ant = t;
+               t = min_box_idx;
+               final = 1;
+               update_delta = 1;
+               if(t < 0)
+                   break;
+               continue;
+            }//break;  // continue;
             if (truth.x < 0 || truth.y < 0 || truth.x > 1 || truth.y > 1 || truth.w < 0 || truth.h < 0) {
                 char buff[256];
                 printf(" Wrong label: truth.x = %f, truth.y = %f, truth.w = %f, truth.h = %f \n", truth.x, truth.y, truth.w, truth.h);
@@ -589,6 +827,173 @@ void *process_batch(void* ptr)
                 }
             }
 
+            printf("BOX: %d %f %f %f %f\n", t, truth.x, truth.y, truth.w, truth.h);
+
+            acc_loss = 0;
+            if ((fabs(tx_ant-truth.x)>2*FLT_EPSILON) || (fabs(ty_ant-truth.y)>2*FLT_EPSILON))
+            {
+
+                if ((min_box_idx > -1) && (t_ant < t)) // Only if comes from no repetition
+                {
+
+                    //////// vvvv PROBABILITY
+
+//                    if (nelem_group > 1)
+//                    {
+//                        // Select min_box_idx based on 1/loss probability
+//                        float sum_loss = 0.0f;
+//                        float scale_zeros = 1.0f;
+//                        int nelem_valid = 0;
+//                        float zero_loss_prob = 0.1f;
+
+//                        for (int z = 0; z<nelem_group; z++)
+//                        {
+//                            printf("ORGANIZED LIST: %d %f\n", idx_group[z], loss_group[z]);
+//                            if(loss_group[z] < 2*FLT_EPSILON) {
+//                                scale_zeros -= zero_loss_prob; //Give a % for non-overlapping solutions
+//                            }
+//                            else {
+//                                sum_loss += 1.0f/loss_group[z];
+//                                nelem_valid++;
+//                            }
+//                        }
+
+//                        float scale_prob = 1.0f/(nelem_group);
+
+//                        if(sum_loss > 2*FLT_EPSILON) {
+//                            scale_prob = (1.0/sum_loss);
+//                        }
+
+//                        float acc_prob = 0.0f;
+//                        float prob_chosen = ((float)rand() / RAND_MAX * (1.0f - 0.0f)) + 0.0f;
+
+//                        printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", prob_chosen, scale_prob, scale_zeros);
+
+//                        for (int z = 0; z<nelem_group; z++)
+//                        {
+//                            if(loss_group[z] > 2*FLT_EPSILON){
+//                                acc_prob += (((1.0f/loss_group[z])*scale_prob) * scale_zeros + zero_loss_prob)/(1 + nelem_group*zero_loss_prob - (1-scale_zeros));
+//                            }
+//                            else {
+//                                if (sum_loss < 2*FLT_EPSILON) {
+//                                    acc_prob += scale_prob;
+//                                }
+//                                else {
+//                                    acc_prob += zero_loss_prob/(1 + nelem_group*zero_loss_prob - (1-scale_zeros));
+//                                }
+//                            }
+
+//                            printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", acc_prob);
+
+//                            if(prob_chosen <= acc_prob) {
+//                                min_box_idx = idx_group[z];
+//                                printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
+//                                break;
+//                            }
+//                        }
+//                    }
+//                    else {
+//                        min_box_idx = idx_group[0];
+//                    }
+
+                    //////// ^^^^ PROBABILITY
+
+                    t_ant = t;
+                    t = min_box_idx;
+                    update_delta = 1;
+
+                    printf("CONTINUE SAME BB %d %d %d\n", cnt, t, t_ant);
+
+                    continue;
+                }
+//                {
+//                    used_boxes[count] = min_box_idx;
+//                    count++;
+//                    min_box_idx = -1;
+//                    used_boxes = (int*)xrealloc(used_boxes, (count) * sizeof(int));
+
+//                }
+
+//                if (skip_loss==1)
+//                {
+//                    skip_loss = 0;
+//                }
+                tx_ant = truth.x;
+                ty_ant = truth.y;
+//                args->tot_iou_loss += min_loss;
+                min_loss=FLT_MAX;
+                min_box_idx = t;
+                cnt = 1;
+
+
+                if (idx_group != NULL)
+                {
+//                    for (int z = 0; z<nelem_group-1; z++)
+//                        printf("ORGANIZED LIST: %d %f\n", idx_group[z], loss_group[z]);
+
+//                    if (nelem_group > 2)
+//                    {
+//                        // Select min_box_idx based on 1/loss probability
+//                        float sum_loss = 0.0f;
+//                        float scale_zeros = 1.0f;
+//                        for (int z = 0; z<nelem_group-1; z++)
+//                        {
+//                            printf("ORGANIZED LIST: %d %f\n", idx_group[z], loss_group[z]);
+//                            if(loss_group[z] < 2*FLT_EPSILON) {
+//                                scale_zeros -= 0.05f; //Give 5% for non-overlapping solutions
+//                            }
+//                            else {
+//                                sum_loss += loss_group[z];
+//                            }
+//                        }
+
+//                        float scale_prob = 1.0f/(nelem_group-1);
+
+//                        if(sum_loss > 2*FLT_EPSILON) {
+//                            scale_prob = 1/sum_loss;
+//                        }
+
+//                        float acc_prob = 0.0f;
+//                        float prob_chosen = ((float)rand() / RAND_MAX * (1.0f - 0.0f)) + 0.0f;
+
+//                        for (int z = 0; z<nelem_group-1; z++)
+//                        {
+//                            if(loss_group[z] > 2*FLT_EPSILON){
+//                                acc_prob += (1 - loss_group[z]*scale_prob) * scale_zeros;
+//                            }
+//                            else {
+//                                if (sum_loss < 2*FLT_EPSILON) {
+//                                    acc_prob += scale_prob;
+//                                }
+//                                else {
+//                                    acc_prob += 0.05;
+//                                }
+//                            }
+
+//                            if(prob_chosen <= acc_prob) {
+//                                min_box_idx = idx_group[z];
+//                                break;
+//                            }
+//                        }
+//                    }
+//                    else {
+//                        min_box_idx = idx_group[0];
+//                    }
+
+                    free(idx_group);
+                    free(loss_group);
+                }
+
+                nelem_group = 1;
+                n_valid = 0;
+
+            } else {
+                nelem_group++;
+                cnt++;
+                printf("SAME BB %d %d %d\n", cnt, t, t_ant);
+                skip_loss = 1;
+            }
+
             int mask_n = int_index(l.mask, best_n, l.n);
             if (mask_n >= 0) {
                 int class_id = state.truth[t * l.truth_size + b * l.truths + 4];
@@ -596,49 +1001,62 @@ void *process_batch(void* ptr)
 
                 int box_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 0);
                 const float class_multiplier = (l.classes_multipliers) ? l.classes_multipliers[class_id] : 1.0f;
-                ious all_ious = delta_yolo_box(truth, l.output, l.biases, best_n, box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
-                (*state.net.total_bbox)++;
+                ious all_ious = delta_yolo_box(update_delta, truth, l.output, l.biases, best_n, box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
+                acc_loss += all_ious.ciou;
+                if (update_delta)
+                {
 
-                const int truth_in_index = t * l.truth_size + b * l.truths + 5;
-                const int track_id = state.truth[truth_in_index];
-                const int truth_out_index = b * l.n * l.w * l.h + mask_n * l.w * l.h + j * l.w + i;
-                l.labels[truth_out_index] = track_id;
-                l.class_ids[truth_out_index] = class_id;
-                //printf(" track_id = %d, t = %d, b = %d, truth_in_index = %d, truth_out_index = %d \n", track_id, t, b, truth_in_index, truth_out_index);
+                    (*state.net.total_bbox)++;
 
-                // range is 0 <= 1
-                args->tot_iou += all_ious.iou;
-//                args->tot_iou_loss += 1 - all_ious.iou;
-                args->tot_iou_loss += all_ious.ciou;
+                    const int truth_in_index = t * l.truth_size + b * l.truths + 5;
+                    const int track_id = state.truth[truth_in_index];
+                    const int truth_out_index = b * l.n * l.w * l.h + mask_n * l.w * l.h + j * l.w + i;
+                    l.labels[truth_out_index] = track_id;
+                    l.class_ids[truth_out_index] = class_id;
+                    //printf(" track_id = %d, t = %d, b = %d, truth_in_index = %d, truth_out_index = %d \n", track_id, t, b, truth_in_index, truth_out_index);
 
-                // range is -1 <= giou <= 1
-                tot_giou += all_ious.giou;
-                args->tot_giou_loss += 1 - all_ious.giou;
+                    // range is 0 <= 1
+                    args->tot_iou += all_ious.iou;
+    //                args->tot_iou_loss += 1 - all_ious.iou;
 
-                tot_diou += all_ious.diou;
-                tot_diou_loss += 1 - all_ious.diou;
+    //                acc_loss += all_ious.ciou;
+    //                if (update_delta)
+    //                {
+                        if (FLT_MAX - args->tot_iou_loss > all_ious.ciou)
+                            args->tot_iou_loss += all_ious.ciou;
+                        else
+                            args->tot_iou_loss = FLT_MAX;
+    //                }
 
-                tot_ciou += all_ious.ciou;
-                tot_ciou_loss += 1 - all_ious.ciou;
+                    // range is -1 <= giou <= 1
+                    tot_giou += all_ious.giou;
+                    args->tot_giou_loss += 1 - all_ious.giou;
 
-                int obj_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 4);
-                avg_obj += l.output[obj_index];
-                if (l.objectness_smooth) {
-                    float delta_obj = class_multiplier * l.obj_normalizer * (1 - l.output[obj_index]);
-                    if (l.delta[obj_index] == 0) l.delta[obj_index] = delta_obj;
+                    tot_diou += all_ious.diou;
+                    tot_diou_loss += 1 - all_ious.diou;
+
+                    tot_ciou += all_ious.ciou;
+                    tot_ciou_loss += 1 - all_ious.ciou;
+
+                    int obj_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 4);
+                    avg_obj += l.output[obj_index];
+                    if (l.objectness_smooth) {
+                        float delta_obj = class_multiplier * l.obj_normalizer * (1 - l.output[obj_index]);
+                        if (l.delta[obj_index] == 0) l.delta[obj_index] = delta_obj;
+                    }
+                    else l.delta[obj_index] = class_multiplier * l.obj_normalizer * (1 - l.output[obj_index]);
+
+                    int class_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 4 + 1);
+                    delta_yolo_class(l.output, l.delta, class_index, class_id, l.classes, l.w * l.h, &avg_cat, l.focal_loss, l.label_smooth_eps, l.classes_multipliers, l.cls_normalizer);
+
+                    //printf(" label: class_id = %d, truth.x = %f, truth.y = %f, truth.w = %f, truth.h = %f \n", class_id, truth.x, truth.y, truth.w, truth.h);
+                    //printf(" mask_n = %d, l.output[obj_index] = %f, l.output[class_index + class_id] = %f \n\n", mask_n, l.output[obj_index], l.output[class_index + class_id]);
+
+                    ++(args->count);
+                    ++(args->class_count);
+                    if (all_ious.iou > .5) recall += 1;
+                    if (all_ious.iou > .75) recall75 += 1;
                 }
-                else l.delta[obj_index] = class_multiplier * l.obj_normalizer * (1 - l.output[obj_index]);
-
-                int class_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 4 + 1);
-                delta_yolo_class(l.output, l.delta, class_index, class_id, l.classes, l.w * l.h, &avg_cat, l.focal_loss, l.label_smooth_eps, l.classes_multipliers, l.cls_normalizer);
-
-                //printf(" label: class_id = %d, truth.x = %f, truth.y = %f, truth.w = %f, truth.h = %f \n", class_id, truth.x, truth.y, truth.w, truth.h);
-                //printf(" mask_n = %d, l.output[obj_index] = %f, l.output[class_index + class_id] = %f \n\n", mask_n, l.output[obj_index], l.output[class_index + class_id]);
-
-                ++(args->count);
-                ++(args->class_count);
-                if (all_ious.iou > .5) recall += 1;
-                if (all_ious.iou > .75) recall75 += 1;
             }
 
             // iou_thresh
@@ -656,43 +1074,93 @@ void *process_batch(void* ptr)
                         if (l.map) class_id = l.map[class_id];
 
                         int box_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 0);
+                        box_idx = box_index;
                         const float class_multiplier = (l.classes_multipliers) ? l.classes_multipliers[class_id] : 1.0f;
-                        ious all_ious = delta_yolo_box(truth, l.output, l.biases, n, box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
-                        (*state.net.total_bbox)++;
+                        ious all_ious = delta_yolo_box(update_delta, truth, l.output, l.biases, n, box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
+                        acc_loss += all_ious.ciou;
+                        if(update_delta)
+                        {
+                            (*state.net.total_bbox)++;
 
-                        // range is 0 <= 1
-                        args->tot_iou += all_ious.iou;
-//                        args->tot_iou_loss += 1 - all_ious.iou;
-                        args->tot_iou_loss += all_ious.ciou;
-                        // range is -1 <= giou <= 1
-                        tot_giou += all_ious.giou;
-                        args->tot_giou_loss += 1 - all_ious.giou;
+                            // range is 0 <= 1
+                            args->tot_iou += all_ious.iou;
+    //                        args->tot_iou_loss += 1 - all_ious.iou;
 
-                        tot_diou += all_ious.diou;
-                        tot_diou_loss += 1 - all_ious.diou;
+    //                        acc_loss += all_ious.ciou;
+    //                        if(update_delta)
+    //                        {
+                                if (FLT_MAX - args->tot_iou_loss > all_ious.ciou)
+                                    args->tot_iou_loss += all_ious.ciou;
+                                else
+                                    args->tot_iou_loss = FLT_MAX;
+    //                        }
+    //                        // range is -1 <= giou <= 1
+                            tot_giou += all_ious.giou;
+                            args->tot_giou_loss += 1 - all_ious.giou;
 
-                        tot_ciou += all_ious.ciou;
-                        tot_ciou_loss += 1 - all_ious.ciou;
+                            tot_diou += all_ious.diou;
+                            tot_diou_loss += 1 - all_ious.diou;
 
-                        int obj_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 4);
-                        avg_obj += l.output[obj_index];
-                        if (l.objectness_smooth) {
-                            float delta_obj = class_multiplier * l.obj_normalizer * (1 - l.output[obj_index]);
-                            if (l.delta[obj_index] == 0) l.delta[obj_index] = delta_obj;
+                            tot_ciou += all_ious.ciou;
+                            tot_ciou_loss += 1 - all_ious.ciou;
+
+                            int obj_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 4);
+                            avg_obj += l.output[obj_index];
+                            if (l.objectness_smooth) {
+                                float delta_obj = class_multiplier * l.obj_normalizer * (1 - l.output[obj_index]);
+                                if (l.delta[obj_index] == 0) l.delta[obj_index] = delta_obj;
+                            }
+                            else l.delta[obj_index] = class_multiplier * l.obj_normalizer * (1 - l.output[obj_index]);
+
+                            int class_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 4 + 1);
+                            delta_yolo_class(l.output, l.delta, class_index, class_id, l.classes, l.w * l.h, &avg_cat, l.focal_loss, l.label_smooth_eps, l.classes_multipliers, l.cls_normalizer);
+
+                            ++(args->count);
+                            ++(args->class_count);
+                            if (all_ious.iou > .5) recall += 1;
+                            if (all_ious.iou > .75) recall75 += 1;
                         }
-                        else l.delta[obj_index] = class_multiplier * l.obj_normalizer * (1 - l.output[obj_index]);
-
-                        int class_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 4 + 1);
-                        delta_yolo_class(l.output, l.delta, class_index, class_id, l.classes, l.w * l.h, &avg_cat, l.focal_loss, l.label_smooth_eps, l.classes_multipliers, l.cls_normalizer);
-
-                        ++(args->count);
-                        ++(args->class_count);
-                        if (all_ious.iou > .5) recall += 1;
-                        if (all_ious.iou > .75) recall75 += 1;
                     }
                 }
             }
+            if(update_delta == 1)
+            {
+                update_delta = 0;
+            }
+            else{
+//                printf("THIS ELEM_GROUP: %d %d %f\n", nelem_group, t, acc_loss);
+                insert_organized(&idx_group, &loss_group, t, (float)acc_loss, nelem_group, &n_valid);
+//                printf("THIS ELEM_GROUP VAL: %d %d\n", (int)(nelem_group/2), idx_group[nelem_group-1]);
+
+                printf("CHOSEN out of %d: %d %f\n", nelem_group, *(idx_group + (int)(n_valid/2)), *(loss_group + (int)(n_valid/2)));
+//                min_box_idx = *(idx_group + (int)(n_valid/2)); //Get always middle value for valid (loss>0)
+//                min_box_idx = *(idx_group + (int)(nelem_group/2)); //Get always middle value
+                min_box_idx = *(idx_group); //Get always best value
+            }
+
+//            if ((min_loss > acc_loss) && (acc_loss > 2*FLT_EPSILON)){
+//                min_loss = acc_loss;
+//                min_box_idx = t;
+//            }
+
+            if(t_ant > t){
+                t = t_ant;
+//                free(loss_group);
+//                free(idx_group);
+//                nelem_group = 1;
+            } else {
+                t++;
+            }
+
+//            t++;
+            if(final==1)
+                break;
         }
+
+//        args->tot_iou_loss += min_loss;
+//        used_boxes[count] = min_box_idx;
+
+        //// ^^^ADD^^^
 
         if (l.iou_thresh < 1.0f) {
             // averages the deltas obtained by the function: delta_yolo_box()_accumulate
@@ -710,6 +1178,8 @@ void *process_batch(void* ptr)
                 }
             }
         }
+
+        free(used_boxes);
 
     }
 
@@ -765,6 +1235,8 @@ void forward_yolo_layer(const layer l, network_state state)
     int count = 0;
     int class_count = 0;
     *(l.cost) = 0;
+
+    float avg_iou_loss = 0;
 
 
     int num_threads = l.batch;
@@ -927,6 +1399,8 @@ void forward_yolo_layer(const layer l, network_state state)
     else {
         // show detailed output
 
+        printf("SHOWING DETAILED\n\n\n");
+
         int stride = l.w*l.h;
         float* no_iou_loss_delta = (float *)calloc(l.batch * l.outputs, sizeof(float));
         memcpy(no_iou_loss_delta, l.delta, l.batch * l.outputs * sizeof(float));
@@ -952,7 +1426,7 @@ void forward_yolo_layer(const layer l, network_state state)
         float loss = pow(mag_array(l.delta, l.outputs * l.batch), 2);
         float iou_loss = loss - classification_loss;
 
-        float avg_iou_loss = 0;
+//        float avg_iou_loss = 0;
         *(l.cost) = loss;
 
         // gIOU loss + MSE (objectness) loss
@@ -960,8 +1434,11 @@ void forward_yolo_layer(const layer l, network_state state)
 //            *(l.cost) = pow(mag_array(l.delta, l.outputs * l.batch), 2);
 
             ///////ADDED
-            avg_iou_loss = count > 0 ? l.iou_normalizer * (tot_iou_loss / count) : 0;
+//            avg_iou_loss = count > 0 ? l.iou_normalizer * (tot_iou_loss / count) : 0;
+            avg_iou_loss += count > 0 ? l.iou_normalizer * (tot_iou_loss / count) : 0;
+            tot_iou_loss = 0;
             *(l.cost) = avg_iou_loss + classification_loss;
+//            loss = pow(mag_array(l.delta, l.outputs * l.batch), 2);
 //            fprintf(stderr, "\n\n\nLOSS HERE\n\n\n\n");
             ///////
         }
