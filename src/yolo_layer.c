@@ -365,7 +365,7 @@ ious delta_yolo_box(int update_delta, box truth, float *x, float *biases, int n,
         if (kldiv > FLT_MAX)
             kldiv = FLT_MAX;
 
-        printf("VALUES KL DIV XW: %f YH: %f TOT: %f IOUL: %f UP: %d\n", kldiv1, kldiv2, kldiv, 1.0-all_ious.iou, update_delta);
+//        printf("VALUES KL DIV XW: %f YH: %f TOT: %f IOUL: %f UP: %d\n", kldiv1, kldiv2, kldiv, 1.0-all_ious.iou, update_delta);
 
 
         all_ious.ciou = (float)kldiv;
@@ -827,7 +827,7 @@ void *process_batch(void* ptr)
                 }
             }
 
-            printf("BOX: %d %f %f %f %f\n", t, truth.x, truth.y, truth.w, truth.h);
+//            printf("BOX: %d %f %f %f %f\n", t, truth.x, truth.y, truth.w, truth.h);
 
             acc_loss = 0;
             if ((fabs(tx_ant-truth.x)>2*FLT_EPSILON) || (fabs(ty_ant-truth.y)>2*FLT_EPSILON))
@@ -848,7 +848,7 @@ void *process_batch(void* ptr)
 
                         for (int z = 0; z<nelem_group; z++)
                         {
-                            printf("ORGANIZED LIST: %d %f\n", idx_group[z], loss_group[z]);
+//                            printf("ORGANIZED LIST: %d %f\n", idx_group[z], loss_group[z]);
                             if(loss_group[z] < 2*FLT_EPSILON) {
                                 scale_zeros -= zero_loss_prob; //Give a % for non-overlapping solutions
                             }
@@ -867,7 +867,7 @@ void *process_batch(void* ptr)
                         float acc_prob = 0.0f;
                         float prob_chosen = ((float)rand() / RAND_MAX * (1.0f - 0.0f)) + 0.0f;
 
-                        printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", prob_chosen, scale_prob, scale_zeros);
+//                        printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", prob_chosen, scale_prob, scale_zeros);
 
                         for (int z = 0; z<nelem_group; z++)
                         {
@@ -883,11 +883,11 @@ void *process_batch(void* ptr)
                                 }
                             }
 
-                            printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", acc_prob);
+//                            printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", acc_prob);
 
                             if(prob_chosen <= acc_prob) {
                                 min_box_idx = idx_group[z];
-                                printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
+//                                printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
                                 break;
                             }
                         }
@@ -902,7 +902,7 @@ void *process_batch(void* ptr)
                     t = min_box_idx;
                     update_delta = 1;
 
-                    printf("CONTINUE SAME BB %d %d %d\n", cnt, t, t_ant);
+//                    printf("CONTINUE SAME BB %d %d %d\n", cnt, t, t_ant);
 
                     continue;
                 }
@@ -990,7 +990,7 @@ void *process_batch(void* ptr)
             } else {
                 nelem_group++;
                 cnt++;
-                printf("SAME BB %d %d %d\n", cnt, t, t_ant);
+//                printf("SAME BB %d %d %d\n", cnt, t, t_ant);
                 skip_loss = 1;
             }
 
@@ -1132,7 +1132,7 @@ void *process_batch(void* ptr)
                 insert_organized(&idx_group, &loss_group, t, (float)acc_loss, nelem_group, &n_valid);
 //                printf("THIS ELEM_GROUP VAL: %d %d\n", (int)(nelem_group/2), idx_group[nelem_group-1]);
 
-                printf("CHOSEN out of %d: %d %f\n", nelem_group, *(idx_group + (int)(n_valid/2)), *(loss_group + (int)(n_valid/2)));
+//                printf("CHOSEN out of %d: %d %f\n", nelem_group, *(idx_group + (int)(n_valid/2)), *(loss_group + (int)(n_valid/2)));
 //                min_box_idx = *(idx_group + (int)(n_valid/2)); //Get always middle value for valid (loss>0)
 //                min_box_idx = *(idx_group + (int)(nelem_group/2)); //Get always middle value
 //                min_box_idx = *(idx_group); //Get always best value
@@ -1399,7 +1399,7 @@ void forward_yolo_layer(const layer l, network_state state)
     else {
         // show detailed output
 
-        printf("SHOWING DETAILED\n\n\n");
+//        printf("SHOWING DETAILED\n\n\n");
 
         int stride = l.w*l.h;
         float* no_iou_loss_delta = (float *)calloc(l.batch * l.outputs, sizeof(float));

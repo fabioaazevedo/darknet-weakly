@@ -246,7 +246,7 @@ box_label *read_boxes(char *filename, int *n)
                     w = 0.0458;
                 }
 
-                printf("VALUE RAND: %f %f %f %f %s\n", x,y, w,h, filename);
+//                printf("VALUE RAND: %f %f %f %f %s\n", x,y, w,h, filename);
 
                 boxes = (box_label*)xrealloc(boxes, (count + 1) * sizeof(box_label));
                 boxes[count].track_id = count + img_hash;
