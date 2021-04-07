@@ -838,63 +838,63 @@ void *process_batch(void* ptr)
 
                     //////// vvvv PROBABILITY
 
-//                    if (nelem_group > 1)
-//                    {
-//                        // Select min_box_idx based on 1/loss probability
-//                        float sum_loss = 0.0f;
-//                        float scale_zeros = 1.0f;
-//                        int nelem_valid = 0;
-//                        float zero_loss_prob = 0.1f;
+                    if (nelem_group > 1)
+                    {
+                        // Select min_box_idx based on 1/loss probability
+                        float sum_loss = 0.0f;
+                        float scale_zeros = 1.0f;
+                        int nelem_valid = 0;
+                        float zero_loss_prob = 0.1f;
 
-//                        for (int z = 0; z<nelem_group; z++)
-//                        {
-//                            printf("ORGANIZED LIST: %d %f\n", idx_group[z], loss_group[z]);
-//                            if(loss_group[z] < 2*FLT_EPSILON) {
-//                                scale_zeros -= zero_loss_prob; //Give a % for non-overlapping solutions
-//                            }
-//                            else {
-//                                sum_loss += 1.0f/loss_group[z];
-//                                nelem_valid++;
-//                            }
-//                        }
+                        for (int z = 0; z<nelem_group; z++)
+                        {
+                            printf("ORGANIZED LIST: %d %f\n", idx_group[z], loss_group[z]);
+                            if(loss_group[z] < 2*FLT_EPSILON) {
+                                scale_zeros -= zero_loss_prob; //Give a % for non-overlapping solutions
+                            }
+                            else {
+                                sum_loss += 1.0f/loss_group[z];
+                                nelem_valid++;
+                            }
+                        }
 
-//                        float scale_prob = 1.0f/(nelem_group);
+                        float scale_prob = 1.0f/(nelem_group);
 
-//                        if(sum_loss > 2*FLT_EPSILON) {
-//                            scale_prob = (1.0/sum_loss);
-//                        }
+                        if(sum_loss > 2*FLT_EPSILON) {
+                            scale_prob = (1.0/sum_loss);
+                        }
 
-//                        float acc_prob = 0.0f;
-//                        float prob_chosen = ((float)rand() / RAND_MAX * (1.0f - 0.0f)) + 0.0f;
+                        float acc_prob = 0.0f;
+                        float prob_chosen = ((float)rand() / RAND_MAX * (1.0f - 0.0f)) + 0.0f;
 
-//                        printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", prob_chosen, scale_prob, scale_zeros);
+                        printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", prob_chosen, scale_prob, scale_zeros);
 
-//                        for (int z = 0; z<nelem_group; z++)
-//                        {
-//                            if(loss_group[z] > 2*FLT_EPSILON){
-//                                acc_prob += (((1.0f/loss_group[z])*scale_prob) * scale_zeros + zero_loss_prob)/(1 + nelem_group*zero_loss_prob - (1-scale_zeros));
-//                            }
-//                            else {
-//                                if (sum_loss < 2*FLT_EPSILON) {
-//                                    acc_prob += scale_prob;
-//                                }
-//                                else {
-//                                    acc_prob += zero_loss_prob/(1 + nelem_group*zero_loss_prob - (1-scale_zeros));
-//                                }
-//                            }
+                        for (int z = 0; z<nelem_group; z++)
+                        {
+                            if(loss_group[z] > 2*FLT_EPSILON){
+                                acc_prob += (((1.0f/loss_group[z])*scale_prob) * scale_zeros + zero_loss_prob)/(1 + nelem_group*zero_loss_prob - (1-scale_zeros));
+                            }
+                            else {
+                                if (sum_loss < 2*FLT_EPSILON) {
+                                    acc_prob += scale_prob;
+                                }
+                                else {
+                                    acc_prob += zero_loss_prob/(1 + nelem_group*zero_loss_prob - (1-scale_zeros));
+                                }
+                            }
 
-//                            printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", acc_prob);
+                            printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", acc_prob);
 
-//                            if(prob_chosen <= acc_prob) {
-//                                min_box_idx = idx_group[z];
-//                                printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
-//                                break;
-//                            }
-//                        }
-//                    }
-//                    else {
-//                        min_box_idx = idx_group[0];
-//                    }
+                            if(prob_chosen <= acc_prob) {
+                                min_box_idx = idx_group[z];
+                                printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
+                                break;
+                            }
+                        }
+                    }
+                    else {
+                        min_box_idx = idx_group[0];
+                    }
 
                     //////// ^^^^ PROBABILITY
 
@@ -1135,7 +1135,7 @@ void *process_batch(void* ptr)
                 printf("CHOSEN out of %d: %d %f\n", nelem_group, *(idx_group + (int)(n_valid/2)), *(loss_group + (int)(n_valid/2)));
 //                min_box_idx = *(idx_group + (int)(n_valid/2)); //Get always middle value for valid (loss>0)
 //                min_box_idx = *(idx_group + (int)(nelem_group/2)); //Get always middle value
-                min_box_idx = *(idx_group); //Get always best value
+//                min_box_idx = *(idx_group); //Get always best value
             }
 
 //            if ((min_loss > acc_loss) && (acc_loss > 2*FLT_EPSILON)){
