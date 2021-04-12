@@ -1427,7 +1427,7 @@ void forward_yolo_layer(const layer l, network_state state)
         float iou_loss = loss - classification_loss;
 
 //        float avg_iou_loss = 0;
-        *(l.cost) = loss;
+//        *(l.cost) = loss;
 
         // gIOU loss + MSE (objectness) loss
         if (l.iou_loss == MSE) {
@@ -1436,7 +1436,7 @@ void forward_yolo_layer(const layer l, network_state state)
             ///////ADDED
 //            avg_iou_loss = count > 0 ? l.iou_normalizer * (tot_iou_loss / count) : 0;
             avg_iou_loss += count > 0 ? l.iou_normalizer * (tot_iou_loss / count) : 0;
-            tot_iou_loss = 0;
+//            tot_iou_loss = 0;
             *(l.cost) = avg_iou_loss + classification_loss;
 //            loss = pow(mag_array(l.delta, l.outputs * l.batch), 2);
 //            fprintf(stderr, "\n\n\nLOSS HERE\n\n\n\n");
