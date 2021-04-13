@@ -206,10 +206,9 @@ ious delta_yolo_box(int update_delta, box truth, float *x, float *biases, int n,
 
 //    printf("\n\n\n\n\nVALUES %f %f %f %f %f %f %f %f %f %d\n", truth.x, truth.y, pred.x, pred.y, truth.w, truth.h, pred.w, pred.h, all_ious.iou, iou_loss);
 
-    all_ious.ciou = 1000;
-
 //    if(all_ious.iou > 2*FLT_EPSILON) {
-    if(1) {
+    if(0) {
+        all_ious.ciou = 1000;
 
 //        float covpredw  = (pred.w/4.0f)*(pred.w/4.0f);
 //        float covtruthw = (truth.w/4.0f)*(truth.w/4.0f);
@@ -1002,7 +1001,9 @@ void *process_batch(void* ptr)
                 int box_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 0);
                 const float class_multiplier = (l.classes_multipliers) ? l.classes_multipliers[class_id] : 1.0f;
                 ious all_ious = delta_yolo_box(update_delta, truth, l.output, l.biases, best_n, box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
-                acc_loss += all_ious.ciou;
+
+//                acc_loss += all_ious.ciou;
+                acc_loss += 1 - all_ious.iou;
                 if (update_delta)
                 {
 
@@ -1017,16 +1018,16 @@ void *process_batch(void* ptr)
 
                     // range is 0 <= 1
                     args->tot_iou += all_ious.iou;
-    //                args->tot_iou_loss += 1 - all_ious.iou;
+                    args->tot_iou_loss += 1 - all_ious.iou;
 
-    //                acc_loss += all_ious.ciou;
-    //                if (update_delta)
-    //                {
-                        if (FLT_MAX - args->tot_iou_loss > all_ious.ciou)
-                            args->tot_iou_loss += all_ious.ciou;
-                        else
-                            args->tot_iou_loss = FLT_MAX;
-    //                }
+//    //                acc_loss += all_ious.ciou;
+//    //                if (update_delta)
+//    //                {
+//                        if (FLT_MAX - args->tot_iou_loss > all_ious.ciou)
+//                            args->tot_iou_loss += all_ious.ciou;
+//                        else
+//                            args->tot_iou_loss = FLT_MAX;
+//    //                }
 
                     // range is -1 <= giou <= 1
                     tot_giou += all_ious.giou;
@@ -1077,23 +1078,25 @@ void *process_batch(void* ptr)
                         box_idx = box_index;
                         const float class_multiplier = (l.classes_multipliers) ? l.classes_multipliers[class_id] : 1.0f;
                         ious all_ious = delta_yolo_box(update_delta, truth, l.output, l.biases, n, box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
-                        acc_loss += all_ious.ciou;
+
+        //                acc_loss += all_ious.ciou;
+                        acc_loss += 1 - all_ious.iou;
                         if(update_delta)
                         {
                             (*state.net.total_bbox)++;
 
                             // range is 0 <= 1
                             args->tot_iou += all_ious.iou;
-    //                        args->tot_iou_loss += 1 - all_ious.iou;
+                            args->tot_iou_loss += 1 - all_ious.iou;
 
-    //                        acc_loss += all_ious.ciou;
-    //                        if(update_delta)
-    //                        {
-                                if (FLT_MAX - args->tot_iou_loss > all_ious.ciou)
-                                    args->tot_iou_loss += all_ious.ciou;
-                                else
-                                    args->tot_iou_loss = FLT_MAX;
-    //                        }
+//    //                        acc_loss += all_ious.ciou;
+//    //                        if(update_delta)
+//    //                        {
+//                                if (FLT_MAX - args->tot_iou_loss > all_ious.ciou)
+//                                    args->tot_iou_loss += all_ious.ciou;
+//                                else
+//                                    args->tot_iou_loss = FLT_MAX;
+//    //                        }
     //                        // range is -1 <= giou <= 1
                             tot_giou += all_ious.giou;
                             args->tot_giou_loss += 1 - all_ious.giou;
@@ -1431,16 +1434,16 @@ void forward_yolo_layer(const layer l, network_state state)
 
         // gIOU loss + MSE (objectness) loss
         if (l.iou_loss == MSE) {
-//            *(l.cost) = pow(mag_array(l.delta, l.outputs * l.batch), 2);
+            *(l.cost) = pow(mag_array(l.delta, l.outputs * l.batch), 2);
 
-            ///////ADDED
-//            avg_iou_loss = count > 0 ? l.iou_normalizer * (tot_iou_loss / count) : 0;
-            avg_iou_loss += count > 0 ? l.iou_normalizer * (tot_iou_loss / count) : 0;
-//            tot_iou_loss = 0;
-            *(l.cost) = avg_iou_loss + classification_loss;
-//            loss = pow(mag_array(l.delta, l.outputs * l.batch), 2);
-//            fprintf(stderr, "\n\n\nLOSS HERE\n\n\n\n");
-            ///////
+//            ///////ADDED
+////            avg_iou_loss = count > 0 ? l.iou_normalizer * (tot_iou_loss / count) : 0;
+//            avg_iou_loss += count > 0 ? l.iou_normalizer * (tot_iou_loss / count) : 0;
+////            tot_iou_loss = 0;
+//            *(l.cost) = avg_iou_loss + classification_loss;
+////            loss = pow(mag_array(l.delta, l.outputs * l.batch), 2);
+////            fprintf(stderr, "\n\n\nLOSS HERE\n\n\n\n");
+//            ///////
         }
         else {
             // Always compute classification loss both for iou + cls loss and for logging with mse loss

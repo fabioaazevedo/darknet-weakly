@@ -437,7 +437,7 @@ int fill_truth_detection(const char *path, int num_boxes, int truth_size, float 
     float lowest_w = 1.F / net_w;
     float lowest_h = 1.F / net_h;
 // COMMENTED
-//    randomize_boxes(boxes, count);
+    randomize_boxes(boxes, count);
     correct_boxes(boxes, count, dx, dy, sx, sy, flip);
     if (count > num_boxes) count = num_boxes;
     float x, y, w, h;
