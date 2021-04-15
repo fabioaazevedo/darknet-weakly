@@ -786,50 +786,209 @@ void *process_batch(void* ptr)
         int nelem_group = 1;
         int n_valid = 0;
 
+        typedef struct box_group {
+            float x;
+            float y;
+            int nelem;
+            int *telem;
+            float *loss;
+        } box_group_t;
+
+        // Struct to group representations over iterations
+        box_group_t *group_boxes = NULL;
+        int num_boxes = 0;
+
+        int current_group = 0;
+        int current_item = 0;
+
+        int all_evaluated = 0;
+
 //        for (t = 0; t < l.max_boxes; ++t) {
         while(t < l.max_boxes){
+
+            printf("INIT\n");
             box truth = float_to_box_stride(state.truth + t * l.truth_size + b * l.truths, 1);
-            if (!truth.x)
-            {
-               t_ant = t;
-               t = min_box_idx;
-               final = 1;
-               update_delta = 1;
-               if(t < 0)
-                   break;
-               continue;
-            }//break;  // continue;
-            if (truth.x < 0 || truth.y < 0 || truth.x > 1 || truth.y > 1 || truth.w < 0 || truth.h < 0) {
-                char buff[256];
-                printf(" Wrong label: truth.x = %f, truth.y = %f, truth.w = %f, truth.h = %f \n", truth.x, truth.y, truth.w, truth.h);
-                sprintf(buff, "echo \"Wrong label: truth.x = %f, truth.y = %f, truth.w = %f, truth.h = %f\" >> bad_label.list",
-                    truth.x, truth.y, truth.w, truth.h);
-                system(buff);
-            }
-            int class_id = state.truth[t * l.truth_size + b * l.truths + 4];
-            if (class_id >= l.classes || class_id < 0) continue; // if label contains class_id more than number of classes in the cfg-file and class_id check garbage value
 
             float best_iou = 0;
             int best_n = 0;
-            i = (truth.x * l.w);
-            j = (truth.y * l.h);
             box truth_shift = truth;
-            truth_shift.x = truth_shift.y = 0;
-            for (n = 0; n < l.total; ++n) {
-                box pred = { 0 };
-                pred.w = l.biases[2 * n] / state.net.w;
-                pred.h = l.biases[2 * n + 1] / state.net.h;
-                float iou = box_iou(pred, truth_shift);
-                if (iou > best_iou) {
-                    best_iou = iou;
-                    best_n = n;
+
+            if (!truth.x)
+            {
+//               t_ant = t;
+//               t = min_box_idx;
+//               final = 1;
+//               update_delta = 1;
+//               if(t < 0)
+//                   break;
+//               continue;
+                if(group_boxes == NULL){
+                    break;
+                }
+
+                all_evaluated = 1;
+                current_group = 0;
+            }//break;  // continue;
+
+            else {
+
+
+
+                if (truth.x < 0 || truth.y < 0 || truth.x > 1 || truth.y > 1 || truth.w < 0 || truth.h < 0) {
+                    char buff[256];
+                    printf(" Wrong label: truth.x = %f, truth.y = %f, truth.w = %f, truth.h = %f \n", truth.x, truth.y, truth.w, truth.h);
+                    sprintf(buff, "echo \"Wrong label: truth.x = %f, truth.y = %f, truth.w = %f, truth.h = %f\" >> bad_label.list",
+                        truth.x, truth.y, truth.w, truth.h);
+                    system(buff);
+                }
+                int class_id = state.truth[t * l.truth_size + b * l.truths + 4];
+                if (class_id >= l.classes || class_id < 0) continue; // if label contains class_id more than number of classes in the cfg-file and class_id check garbage value
+
+//                float best_iou = 0;
+//                int best_n = 0;
+                i = (truth.x * l.w);
+                j = (truth.y * l.h);
+//                box truth_shift = truth;
+                truth_shift.x = truth_shift.y = 0;
+                for (n = 0; n < l.total; ++n) {
+                    box pred = { 0 };
+                    pred.w = l.biases[2 * n] / state.net.w;
+                    pred.h = l.biases[2 * n + 1] / state.net.h;
+                    float iou = box_iou(pred, truth_shift);
+                    if (iou > best_iou) {
+                        best_iou = iou;
+                        best_n = n;
+                    }
                 }
             }
 
-//            printf("BOX: %d %f %f %f %f\n", t, truth.x, truth.y, truth.w, truth.h);
+            if (all_evaluated == 0) {
+                printf("BOX: %d %f %f %f %f\n", t, truth.x, truth.y, truth.w, truth.h);
+
+                if (group_boxes == NULL) {
+                    num_boxes++;
+                    group_boxes = (box_group_t*)malloc(num_boxes*sizeof(box_group_t));
+                    group_boxes[0].x = truth.x;
+                    group_boxes[0].y = truth.y;
+                    group_boxes[0].nelem = 1;
+                    group_boxes[0].telem = (int *)malloc(group_boxes[0].nelem*sizeof(int));
+                    group_boxes[0].loss  = (float *)malloc(group_boxes[0].nelem*sizeof(float));
+    //                *(group_boxes[0].telem) = t;
+                    group_boxes[0].telem[0] = t;
+                    current_group = 0;
+                    current_item = 0;
+                } else {
+                    int i = 0;
+                    for (i=0; i < num_boxes; i++)
+                    {
+                        if ((fabs(group_boxes[i].x-truth.x)>2*FLT_EPSILON) || (fabs(group_boxes[i].y-truth.y)>2*FLT_EPSILON)) {
+                            continue;
+                        }
+
+                        group_boxes[i].nelem++;
+                        group_boxes[i].telem = (int *)realloc(group_boxes[i].telem,  group_boxes[i].nelem*sizeof(int));
+                        group_boxes[i].loss  = (float *)realloc(group_boxes[i].loss, group_boxes[i].nelem*sizeof(float));
+                        group_boxes[i].telem[group_boxes[i].nelem-1] = t;
+
+                        current_group = i;
+                        current_item = group_boxes[i].nelem-1;
+                        break;
+                    }
+
+                    if (i==num_boxes) //No matching found
+                    {
+                        num_boxes++;
+                        group_boxes = (box_group_t*)realloc(group_boxes, num_boxes*sizeof(box_group_t));
+                        group_boxes[i].x = truth.x;
+                        group_boxes[i].y = truth.y;
+                        group_boxes[i].nelem = 1;
+                        group_boxes[i].telem = (int *)malloc(group_boxes[i].nelem*sizeof(int));
+                        group_boxes[i].loss  = (float *)malloc(group_boxes[i].nelem*sizeof(float));
+    //                    *(group_boxes[num_boxes-1].telem) = t;
+                        group_boxes[i].telem[group_boxes[i].nelem-1] = t;
+
+                        current_group = i;
+                        current_item = group_boxes[i].nelem-1;
+                    }
+                }
+            }
+            else {
+                if (update_delta == 0){
+
+                float sum_loss = 0.0f;
+                float scale_zeros = 1.0f;
+                int nelem_valid = 0;
+                float zero_loss_prob = 0.1f;
+
+                if(group_boxes[current_group].nelem > 1) {
+                    for (int z = 0; z<group_boxes[current_group].nelem; z++)
+                    {
+                        if(group_boxes[current_group].loss[z] < 2*FLT_EPSILON) {
+                            scale_zeros -= zero_loss_prob; //Give a % for non-overlapping solutions
+                        }
+                        else {
+                            sum_loss += 1.0f/group_boxes[current_group].loss[z];
+                            nelem_valid++;
+                        }
+
+                        printf("ORGANIZED LIST: %d %f\n", group_boxes[current_group].telem[z], group_boxes[current_group].loss[z]);
+                    }
+
+                    float scale_prob = 1.0f/(group_boxes[current_group].nelem);
+
+                    if(sum_loss > 2*FLT_EPSILON) {
+                        scale_prob = (1.0/sum_loss);
+                    }
+
+                    float acc_prob = 0.0f;
+                    float prob_chosen = ((float)rand() / RAND_MAX * (1.0f - 0.0f)) + 0.0f;
+
+                            printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", prob_chosen, scale_prob, scale_zeros);
+
+                    for (int z = 0; z<group_boxes[current_group].nelem; z++)
+                    {
+                        if(group_boxes[current_group].loss[z] > 2*FLT_EPSILON){
+                            acc_prob += (((1.0f/group_boxes[current_group].loss[z])*scale_prob) * scale_zeros + zero_loss_prob)/(1 + group_boxes[current_group].nelem*zero_loss_prob - (1-scale_zeros));
+                        }
+                        else {
+                            if (sum_loss < 2*FLT_EPSILON) {
+                                acc_prob += scale_prob;
+                            }
+                            else {
+                                acc_prob += zero_loss_prob/(1 + group_boxes[current_group].nelem*zero_loss_prob - (1-scale_zeros));
+                            }
+                        }
+
+                                printf("PROB: %f LOSS: %f ID: %d\n", acc_prob, group_boxes[current_group].loss[z], group_boxes[current_group].telem[z]);
+
+                        if(prob_chosen <= acc_prob) {
+                            min_box_idx = group_boxes[current_group].telem[z];
+                            current_item = z;
+                                    printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
+                            break;
+                        }
+                    }
+                }
+                else {
+                    current_item = 0;
+                    min_box_idx = group_boxes[current_group].telem[0];
+//                    printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
+                }
+
+                t = min_box_idx;
+                update_delta = 1;
+
+                current_group++; //To iterate next
+                continue;
+
+                }
+            }
+
+            printf("NUMBER of GROUPS: %d\n", num_boxes);
 
             acc_loss = 0;
-            if ((fabs(tx_ant-truth.x)>2*FLT_EPSILON) || (fabs(ty_ant-truth.y)>2*FLT_EPSILON))
+//            if ((fabs(tx_ant-truth.x)>2*FLT_EPSILON) || (fabs(ty_ant-truth.y)>2*FLT_EPSILON))
+            if (0)
             {
 
                 if ((min_box_idx > -1) && (t_ant < t)) // Only if comes from no repetition
@@ -986,12 +1145,14 @@ void *process_batch(void* ptr)
                 nelem_group = 1;
                 n_valid = 0;
 
-            } else {
-                nelem_group++;
-                cnt++;
-//                printf("SAME BB %d %d %d\n", cnt, t, t_ant);
-                skip_loss = 1;
             }
+//            else {
+//                nelem_group++;
+//                cnt++;
+////                printf("SAME BB %d %d %d\n", cnt, t, t_ant);
+//                skip_loss = 1;
+//            }
+            // ^^^ COMMENTED
 
             int mask_n = int_index(l.mask, best_n, l.n);
             if (mask_n >= 0) {
@@ -1079,7 +1240,7 @@ void *process_batch(void* ptr)
                         const float class_multiplier = (l.classes_multipliers) ? l.classes_multipliers[class_id] : 1.0f;
                         ious all_ious = delta_yolo_box(update_delta, truth, l.output, l.biases, n, box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
 
-        //                acc_loss += all_ious.ciou;
+//                        acc_loss += all_ious.ciou;
                         acc_loss += 1 - all_ious.iou;
                         if(update_delta)
                         {
@@ -1126,19 +1287,26 @@ void *process_batch(void* ptr)
                     }
                 }
             }
+
+            printf("CP1 %d %d %d\n", update_delta, current_group, num_boxes);
+
             if(update_delta == 1)
             {
                 update_delta = 0;
+
             }
             else{
 //                printf("THIS ELEM_GROUP: %d %d %f\n", nelem_group, t, acc_loss);
-                insert_organized(&idx_group, &loss_group, t, (float)acc_loss, nelem_group, &n_valid);
+//                insert_organized(&idx_group, &loss_group, t, (float)acc_loss, nelem_group, &n_valid);
 //                printf("THIS ELEM_GROUP VAL: %d %d\n", (int)(nelem_group/2), idx_group[nelem_group-1]);
 
 //                printf("CHOSEN out of %d: %d %f\n", nelem_group, *(idx_group + (int)(n_valid/2)), *(loss_group + (int)(n_valid/2)));
 //                min_box_idx = *(idx_group + (int)(n_valid/2)); //Get always middle value for valid (loss>0)
 //                min_box_idx = *(idx_group + (int)(nelem_group/2)); //Get always middle value
 //                min_box_idx = *(idx_group); //Get always best value
+
+                group_boxes[current_group].loss[current_item] = acc_loss;
+
             }
 
 //            if ((min_loss > acc_loss) && (acc_loss > 2*FLT_EPSILON)){
@@ -1146,17 +1314,21 @@ void *process_batch(void* ptr)
 //                min_box_idx = t;
 //            }
 
-            if(t_ant > t){
-                t = t_ant;
-//                free(loss_group);
-//                free(idx_group);
-//                nelem_group = 1;
-            } else {
+//            if(t_ant > t){
+//                t = t_ant;
+////                free(loss_group);
+////                free(idx_group);
+////                nelem_group = 1;
+//            } else {
+//                t++;
+//            }
+
+            if(all_evaluated==0){
                 t++;
             }
-
-//            t++;
-            if(final==1)
+//            if(final==1)
+//                break;
+            if((all_evaluated==1) && (current_group==num_boxes))
                 break;
         }
 
@@ -1183,6 +1355,15 @@ void *process_batch(void* ptr)
         }
 
         free(used_boxes);
+
+        printf("FREE BOXES");
+        for (int i = num_boxes-1; i >= 0; i--) {
+            group_boxes[i].nelem = 0;
+            free(group_boxes[i].loss);
+            free(group_boxes[i].telem);
+        }
+        free(group_boxes);
+        num_boxes = 0;
 
     }
 
@@ -1429,8 +1610,8 @@ void forward_yolo_layer(const layer l, network_state state)
         float loss = pow(mag_array(l.delta, l.outputs * l.batch), 2);
         float iou_loss = loss - classification_loss;
 
-//        float avg_iou_loss = 0;
-//        *(l.cost) = loss;
+        float avg_iou_loss = 0;
+        *(l.cost) = loss;
 
         // gIOU loss + MSE (objectness) loss
         if (l.iou_loss == MSE) {
