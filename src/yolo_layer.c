@@ -806,7 +806,7 @@ void *process_batch(void* ptr)
 //        for (t = 0; t < l.max_boxes; ++t) {
         while(t < l.max_boxes){
 
-            printf("INIT\n");
+//            printf("INIT\n");
             box truth = float_to_box_stride(state.truth + t * l.truth_size + b * l.truths, 1);
 
             float best_iou = 0;
@@ -863,7 +863,7 @@ void *process_batch(void* ptr)
             }
 
             if (all_evaluated == 0) {
-                printf("BOX: %d %f %f %f %f\n", t, truth.x, truth.y, truth.w, truth.h);
+//                printf("BOX: %d %f %f %f %f\n", t, truth.x, truth.y, truth.w, truth.h);
 
                 if (group_boxes == NULL) {
                     num_boxes++;
@@ -931,7 +931,7 @@ void *process_batch(void* ptr)
                             nelem_valid++;
                         }
 
-                        printf("ORGANIZED LIST: %d %f\n", group_boxes[current_group].telem[z], group_boxes[current_group].loss[z]);
+//                        printf("ORGANIZED LIST: %d %f\n", group_boxes[current_group].telem[z], group_boxes[current_group].loss[z]);
                     }
 
                     float scale_prob = 1.0f/(group_boxes[current_group].nelem);
@@ -943,7 +943,7 @@ void *process_batch(void* ptr)
                     float acc_prob = 0.0f;
                     float prob_chosen = ((float)rand() / RAND_MAX * (1.0f - 0.0f)) + 0.0f;
 
-                            printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", prob_chosen, scale_prob, scale_zeros);
+//                            printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", prob_chosen, scale_prob, scale_zeros);
 
                     for (int z = 0; z<group_boxes[current_group].nelem; z++)
                     {
@@ -959,12 +959,12 @@ void *process_batch(void* ptr)
                             }
                         }
 
-                                printf("PROB: %f LOSS: %f ID: %d\n", acc_prob, group_boxes[current_group].loss[z], group_boxes[current_group].telem[z]);
+//                                printf("PROB: %f LOSS: %f ID: %d\n", acc_prob, group_boxes[current_group].loss[z], group_boxes[current_group].telem[z]);
 
                         if(prob_chosen <= acc_prob) {
                             min_box_idx = group_boxes[current_group].telem[z];
                             current_item = z;
-                                    printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
+//                                    printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
                             break;
                         }
                     }
@@ -984,7 +984,7 @@ void *process_batch(void* ptr)
                 }
             }
 
-            printf("NUMBER of GROUPS: %d\n", num_boxes);
+//            printf("NUMBER of GROUPS: %d\n", num_boxes);
 
             acc_loss = 0;
 //            if ((fabs(tx_ant-truth.x)>2*FLT_EPSILON) || (fabs(ty_ant-truth.y)>2*FLT_EPSILON))
@@ -1288,7 +1288,7 @@ void *process_batch(void* ptr)
                 }
             }
 
-            printf("CP1 %d %d %d\n", update_delta, current_group, num_boxes);
+//            printf("CP1 %d %d %d\n", update_delta, current_group, num_boxes);
 
             if(update_delta == 1)
             {
@@ -1356,7 +1356,7 @@ void *process_batch(void* ptr)
 
         free(used_boxes);
 
-        printf("FREE BOXES");
+//        printf("FREE BOXES");
         for (int i = num_boxes-1; i >= 0; i--) {
             group_boxes[i].nelem = 0;
             free(group_boxes[i].loss);
