@@ -227,23 +227,34 @@ box_label *read_boxes(char *filename, int *n)
 //            for (int k = 0; k < 3; k++){
             for (int k = 0; k < 5; k++){
 
-                float w_mean  = rand_uniform(0.0,1.0) < 0.77 ? 0.0458 : 0.0650;
-                float w_sigma = rand_uniform(0.0,1.0) < 0.77 ? 0.0082 : 0.0174;
+                // CROSSWALK
+//                float w_mean  = rand_uniform(0.0,1.0) < 0.77 ? 0.0458 : 0.0650;
+//                float w_sigma = rand_uniform(0.0,1.0) < 0.77 ? 0.0082 : 0.0174;
 
-                float h_mean  = rand_uniform(0.0,1.0) < 0.83 ? 0.0563 : 0.0750;
-                float h_sigma = rand_uniform(0.0,1.0) < 0.83 ? 0.0086 : 0.0231;
+//                float h_mean  = rand_uniform(0.0,1.0) < 0.83 ? 0.0563 : 0.0750;
+//                float h_sigma = rand_uniform(0.0,1.0) < 0.83 ? 0.0086 : 0.0231;
+
+
+                // CATS
+                float w_mean  = rand_uniform(0.0,1.0) < 0.5 ? 0.30154066 : 0.70203963;
+                float w_sigma = rand_uniform(0.0,1.0) < 0.5 ? 0.14545548 : 0.17012213;
+
+                float h_mean  = rand_uniform(0.0,1.0) < 0.45 ? 0.73561638 : 0.33726578;
+                float h_sigma = rand_uniform(0.0,1.0) < 0.45 ? 0.15512773 : 0.1515984;
 
                 float aw = normalRandom(w_mean, w_sigma);
                 float ah = normalRandom(h_mean, h_sigma);
 
-                if((aw > 0.001f) && (ah > 0.001f))
+                if((aw > 0.001f) && (ah > 0.001f) && (aw < 1.0f) && (aw < 1.0f) )
                 {
                     w = aw;
                     h = ah;
                 }
                 else {
-                    h = 0.0563;
-                    w = 0.0458;
+                    h = 0.33726578;
+                    w = 0.30154066;
+                    //                    h = 0.0563;
+//                    w = 0.0458;
                 }
 
 //                printf("VALUE RAND: %f %f %f %f %s\n", x,y, w,h, filename);

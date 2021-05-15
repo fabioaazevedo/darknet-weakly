@@ -367,7 +367,7 @@ ious delta_yolo_box(int update_delta, box truth, float *x, float *biases, int n,
 //        printf("VALUES KL DIV XW: %f YH: %f TOT: %f IOUL: %f UP: %d\n", kldiv1, kldiv2, kldiv, 1.0-all_ious.iou, update_delta);
 
 
-        all_ious.ciou = (float)kldiv;
+        all_ious.ciou = 10*(float)kldiv;
 //        if (all_ious.iou < 0.0f)
 //            all_ious.iou = 0.0f;
 
@@ -915,71 +915,72 @@ void *process_batch(void* ptr)
             else {
                 if (update_delta == 0){
 
-                float sum_loss = 0.0f;
-                float scale_zeros = 1.0f;
-                int nelem_valid = 0;
-                float zero_loss_prob = 0.1f;
+                    float sum_loss = 0.0f;
+                    float scale_zeros = 1.0f;
+                    int nelem_valid = 0;
+                    float zero_loss_prob = 0.1f;
 
-                if(group_boxes[current_group].nelem > 1) {
-                    for (int z = 0; z<group_boxes[current_group].nelem; z++)
-                    {
-                        if(group_boxes[current_group].loss[z] < 2*FLT_EPSILON) {
-                            scale_zeros -= zero_loss_prob; //Give a % for non-overlapping solutions
-                        }
-                        else {
-                            sum_loss += 1.0f/group_boxes[current_group].loss[z];
-                            nelem_valid++;
-                        }
-
-//                        printf("ORGANIZED LIST: %d %f\n", group_boxes[current_group].telem[z], group_boxes[current_group].loss[z]);
-                    }
-
-                    float scale_prob = 1.0f/(group_boxes[current_group].nelem);
-
-                    if(sum_loss > 2*FLT_EPSILON) {
-                        scale_prob = (1.0/sum_loss);
-                    }
-
-                    float acc_prob = 0.0f;
-                    float prob_chosen = ((float)rand() / RAND_MAX * (1.0f - 0.0f)) + 0.0f;
-
-//                            printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", prob_chosen, scale_prob, scale_zeros);
-
-                    for (int z = 0; z<group_boxes[current_group].nelem; z++)
-                    {
-                        if(group_boxes[current_group].loss[z] > 2*FLT_EPSILON){
-                            acc_prob += (((1.0f/group_boxes[current_group].loss[z])*scale_prob) * scale_zeros + zero_loss_prob)/(1 + group_boxes[current_group].nelem*zero_loss_prob - (1-scale_zeros));
-                        }
-                        else {
-                            if (sum_loss < 2*FLT_EPSILON) {
-                                acc_prob += scale_prob;
+                    if(group_boxes[current_group].nelem > 1) {
+//                         printf("ORGANIZED LIST\n");
+                        for (int z = 0; z<group_boxes[current_group].nelem; z++)
+                        {
+                            if(group_boxes[current_group].loss[z] < 2*FLT_EPSILON) {
+                                scale_zeros -= zero_loss_prob; //Give a % for non-overlapping solutions
                             }
                             else {
-                                acc_prob += zero_loss_prob/(1 + group_boxes[current_group].nelem*zero_loss_prob - (1-scale_zeros));
+                                sum_loss += 1.0f/group_boxes[current_group].loss[z];
+                                nelem_valid++;
+                            }
+
+//                            printf("ORGANIZED LIST: %d %f\n", group_boxes[current_group].telem[z], group_boxes[current_group].loss[z]);
+                        }
+
+                        float scale_prob = 1.0f/(group_boxes[current_group].nelem);
+
+                        if(sum_loss > 2*FLT_EPSILON) {
+                            scale_prob = (1.0/sum_loss);
+                        }
+
+                        float acc_prob = 0.0f;
+                        float prob_chosen = ((float)rand() / RAND_MAX * (1.0f - 0.0f)) + 0.0f;
+
+    //                            printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", prob_chosen, scale_prob, scale_zeros);
+
+                        for (int z = 0; z<group_boxes[current_group].nelem; z++)
+                        {
+                            if(group_boxes[current_group].loss[z] > 2*FLT_EPSILON){
+                                acc_prob += (((1.0f/group_boxes[current_group].loss[z])*scale_prob) * scale_zeros + zero_loss_prob)/(1 + group_boxes[current_group].nelem*zero_loss_prob - (1-scale_zeros));
+                            }
+                            else {
+                                if (sum_loss < 2*FLT_EPSILON) {
+                                    acc_prob += scale_prob;
+                                }
+                                else {
+                                    acc_prob += zero_loss_prob/(1 + group_boxes[current_group].nelem*zero_loss_prob - (1-scale_zeros));
+                                }
+                            }
+
+    //                                printf("PROB: %f LOSS: %f ID: %d\n", acc_prob, group_boxes[current_group].loss[z], group_boxes[current_group].telem[z]);
+
+                            if(prob_chosen <= acc_prob) {
+                                min_box_idx = group_boxes[current_group].telem[z];
+                                current_item = z;
+    //                                    printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
+                                break;
                             }
                         }
-
-//                                printf("PROB: %f LOSS: %f ID: %d\n", acc_prob, group_boxes[current_group].loss[z], group_boxes[current_group].telem[z]);
-
-                        if(prob_chosen <= acc_prob) {
-                            min_box_idx = group_boxes[current_group].telem[z];
-                            current_item = z;
-//                                    printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
-                            break;
-                        }
                     }
-                }
-                else {
-                    current_item = 0;
-                    min_box_idx = group_boxes[current_group].telem[0];
-//                    printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
-                }
+                    else {
+                        current_item = 0;
+                        min_box_idx = group_boxes[current_group].telem[0];
+    //                    printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
+                    }
 
-                t = min_box_idx;
-                update_delta = 1;
+                    t = min_box_idx;
+                    update_delta = 1;
 
-                current_group++; //To iterate next
-                continue;
+                    current_group++; //To iterate next
+                    continue;
 
                 }
             }
@@ -1180,6 +1181,7 @@ void *process_batch(void* ptr)
                     // range is 0 <= 1
                     args->tot_iou += all_ious.iou;
                     args->tot_iou_loss += 1 - all_ious.iou;
+//                    args->tot_iou_loss += all_ious.ciou;
 
 //    //                acc_loss += all_ious.ciou;
 //    //                if (update_delta)
@@ -1249,6 +1251,7 @@ void *process_batch(void* ptr)
                             // range is 0 <= 1
                             args->tot_iou += all_ious.iou;
                             args->tot_iou_loss += 1 - all_ious.iou;
+//                            args->tot_iou_loss += all_ious.ciou;
 
 //    //                        acc_loss += all_ious.ciou;
 //    //                        if(update_delta)
@@ -1306,6 +1309,27 @@ void *process_batch(void* ptr)
 //                min_box_idx = *(idx_group); //Get always best value
 
                 group_boxes[current_group].loss[current_item] = acc_loss;
+
+                if (group_boxes[current_group].nelem > 1)
+                {
+                    for (int a = 0; a < group_boxes[current_group].nelem-1; a++) {
+                        for (int b = a; b < group_boxes[current_group].nelem; ++b) {
+                            if( ((group_boxes[current_group].loss[a] > group_boxes[current_group].loss[b]) && (group_boxes[current_group].loss[b] > 2*FLT_EPSILON)) ||
+                                 (group_boxes[current_group].loss[a] < 2*FLT_EPSILON)){
+                                float aux_loss = group_boxes[current_group].loss[a];
+                                group_boxes[current_group].loss[a] = group_boxes[current_group].loss[b];
+                                group_boxes[current_group].loss[b] = aux_loss;
+
+                                int aux_t = group_boxes[current_group].telem[a];
+                                group_boxes[current_group].telem[a] = group_boxes[current_group].telem[b];
+                                group_boxes[current_group].telem[b] = aux_t;
+
+                            }
+                        }
+                    }
+                }
+
+                //// COLOCAR Organizado por Loss
 
             }
 
