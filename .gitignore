@@ -55,3 +55,13 @@ include/darknet/
 uselib
 uselib_track
 darknet
+
+
+*.cflags
+*.config
+*.creator*
+*.cxxflags
+*.files
+*.includes
+
+weights/

@@ -11,6 +11,10 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include <sys/types.h>
+#include <unistd.h>
+#include <sys/syscall.h>
+
 extern int check_mistakes;
 
 layer make_yolo_layer(int batch, int w, int h, int n, int total, int *mask, int classes, int max_boxes)
@@ -171,10 +175,12 @@ static inline float clip_value(float val, const float max_val)
     return val;
 }
 
-ious delta_yolo_box(int update_delta, box truth, float *x, float *biases, int n, int index, int i, int j, int lw, int lh, int w, int h, float *delta, float scale, int stride, float iou_normalizer, IOU_LOSS iou_loss, int accumulate, float max_delta, int *rewritten_bbox, int new_coords)
+ious delta_yolo_box(int track_id, int num_elems, int update_delta, box truth, float *x, float *biases, int n, int index, int i, int j, int lw, int lh, int w, int h, float *delta, float scale, int stride, float iou_normalizer, IOU_LOSS iou_loss, int accumulate, float max_delta, int *rewritten_bbox, int new_coords)
 {
-    if (delta[index + 0 * stride] || delta[index + 1 * stride] || delta[index + 2 * stride] || delta[index + 3 * stride]) {
-        (*rewritten_bbox)++;
+    if (update_delta) {
+        if (delta[index + 0 * stride] || delta[index + 1 * stride] || delta[index + 2 * stride] || delta[index + 3 * stride]) {
+            (*rewritten_bbox)++;
+        }
     }
 
     box ltruth;
@@ -194,9 +200,11 @@ ious delta_yolo_box(int update_delta, box truth, float *x, float *biases, int n,
 //        printf("\n\nPOINT HERE %f %f\n\n", truth.w, truth.h);
 //    }
 
+    pid_t pid = syscall(__NR_gettid);
+
     ious all_ious = { 0 };
-    // i - step in layer width
-    // j - step in layer height
+    // i - step in grid width
+    // j - step in grid height
     //  Returns a box in absolute coordinates
     box pred = get_yolo_box(x, biases, n, index, i, j, lw, lh, w, h, stride, new_coords);
     all_ious.iou = box_iou(pred, ltruth);
@@ -204,7 +212,381 @@ ious delta_yolo_box(int update_delta, box truth, float *x, float *biases, int n,
     all_ious.diou = box_diou(pred, ltruth);
     all_ious.ciou = box_ciou(pred, ltruth);
 
+    printf("(%x)PREDICTION: %f %f %f %f\n", pid, pred.x, pred.y, pred.w, pred.h);
+
+//    int s_id = (track_id/1000000)%10;
+    int s_id, img_id, label_id;
+    char* fname_base = (char*)malloc(100*sizeof(char));
+
+//    if( access( "current_batch.txt", F_OK ) == 0 ) {
+//        FILE* fbatch = fopen("current_batch.txt", "r");
+
+//        while(fscanf(fbatch, "%d %d %d %s\n", &img_id, &s_id, &label_id, fname_base)==4){
+////            fscanf(fbatch, "%d %d %d %s\n", &img_id, &s_id, &label_id, fname_base);
+//            if(track_id == img_id) {
+//                break;
+//            }
+//        }
+
+//        fclose(fbatch);
+//    }
+
+    char* fname_hash;
+    fname_hash = (char*)malloc(100*sizeof (char));
+
+    sprintf(fname_hash, "hash/%d.txt", track_id);
+    if( access( fname_hash, F_OK ) == 0 ) {
+        FILE* fhash = fopen(fname_hash, "r");
+        if(fscanf(fhash, "%d %d %s\n", &s_id, &label_id, fname_base) != 3) {
+            printf("HASH FILE DELTA INCORRECT %d %d %d %s\n", track_id, s_id, label_id, fname_base);
+            all_ious.iou = all_ious.giou = all_ious.ciou = all_ious.diou = 0;
+//            exit(0);
+            return all_ious;
+        }
+        fclose(fhash);
+    } else {
+        printf("NO FILE HASH DELTA FOUND %d\n", track_id);
+//        all_ious = {0};
+        all_ious.iou = all_ious.giou = all_ious.ciou = all_ious.diou = 0;
+//        exit(0);
+        return all_ious;
+    }
+
+    free(fname_hash);
+//    free(fname_base);
+
+    float alpha = 0.75f, beta = 0.5f;
+
+    if (update_delta) {
+
+        typedef struct pred_args {
+            int id;
+            int cnt;
+            int lid; //label_id
+            float x;
+            float y;
+            float w;
+            float h;
+            float loss;
+            float conf;
+        } pred_args_t;
+
+//        if (s_id == 1) {
+//        if ((s_id == 1) || (s_id == 2)) {
+        if (s_id > 0) {
+//            int img_id = (track_id)%1000000;
+//            int label_id = (track_id)/10000000;
+
+            float den = sqrt(pred.w*pred.w/4 + pred.h*pred.h/4);
+            float num = -sqrt((pred.x-truth.x)*(pred.x-truth.x) + (pred.y-truth.y)*(pred.y-truth.y));
+            float center_iou = den > 2*FLT_EPSILON ? (1-exp(num/den)) : 0;
+
+            // 1 if centers coincide
+
+            if(s_id == 1 ) {
+                all_ious.iou = center_iou;
+            } else if ((s_id == 2) || (s_id == 4)){
+                all_ious.iou *= alpha;
+                all_ious.iou += center_iou*(1-alpha);
+//                all_ious.iou /= 2.0f;
+            } else if (s_id == 3) {
+                all_ious.iou = 0.0;
+            }
+
+
+            char* fname_init;
+            fname_init = (char*)malloc(100*sizeof (char));
+//            sprintf(fname_init, "/home/fazevedo/Desktop/PhD/COCOPerson/labels/train/%012d_init.txt", img_id);
+            sprintf(fname_init, "%s_init.txt", fname_base);
+            printf("\n(%x)NAME OF INIT FILE %s %d\n", pid, fname_init, label_id);
+
+            char* fname_scale;
+            fname_scale = (char*)malloc(100*sizeof (char));
+//            sprintf(fname_scale, "/home/fazevedo/Desktop/PhD/COCOPerson/labels/train/%012d_scale.txt", img_id);
+            sprintf(fname_scale, "%s_scale.txt", fname_base);
+            printf("(%x)NAME OF SCALE FILE %s %d\n", pid, fname_scale, label_id);
+
+            char* fname_pred;
+            fname_pred = (char*)malloc(100*sizeof (char));
+//            sprintf(fname_pred, "/home/fazevedo/Desktop/PhD/COCOPerson/labels/train/%012d_pred.txt", img_id);
+            sprintf(fname_pred, "%s_pred.txt", fname_base);
+            printf("(%x)NAME OF PREDICTION FILE %s %d\n", pid, fname_pred, label_id);
+
+            if( access( fname_init, F_OK ) == 0 ) {
+                FILE* finit = fopen(fname_init, "r");
+
+                int z = 0;
+
+                float bh, bw, x_init, y_init;
+                int id = 0;
+
+                while(fscanf(finit, "%d %f %f %f %f", &id, &x_init, &y_init, &bw, &bh) == 5) {
+                    if (z != label_id){ // Verify if it is sample ID needed.
+                        z++;
+                        continue;
+                    }
+                    break;
+                }
+                fclose(finit);
+
+                if( access( fname_scale, F_OK ) == 0 ) {
+                    FILE* fscale = fopen(fname_scale, "r");
+
+                    float dx, dy, sw, sh;
+                    int read, flip;
+
+                    if(fscanf(fscale, "%d %f %f %f %f %d", & read, &dx, &dy, &sw, &sh, &flip) == 6) {
+                        printf("(%x)SCALES: %f %f %f %f %f %f %d\n", pid, x_init, y_init, dx, dy, sw, sh, flip);
+
+                        float x_rec = (fabs(flip - truth.x) + dx)/sw;
+                        bw = pred.w/sw;
+                        bw += 2*fabs(x_rec-x_init);
+                        bw = fminf(1.0f, bw);
+
+                        float y_rec = (truth.y + dy)/sh;
+                        bh = pred.h/sh;
+                        bh += 2*fabs(y_rec-y_init);
+                        bh = fminf(1.0f, bh);
+
+                        float xpred_rec = (fabs(flip - pred.x) + dx)/sw;
+                        float ypred_rec = (pred.y + dy)/sh;
+
+                        printf("(%x)RECOVER: %f %f %f %f\n", pid, x_rec, y_rec, w, h);
+                        printf("(%x)RECOVERPRED: %f %f %f %f X:%f Y:%f TX:%f TY:%f XI:%f YI:%f\n", pid, xpred_rec, ypred_rec, w, h, pred.x, pred.y, truth.x, truth.y, x_init, y_init);
+
+//                        float den = sqrt(pred.w*pred.w/4 + pred.h*pred.h/4);
+//                        float num = -sqrt((pred.x-truth.x)*(pred.x-truth.x) + (pred.y-truth.y)*(pred.y-truth.y));
+//                        float center_iou = den > 2*FLT_EPSILON ? (1-exp(num/den)) : 1;
+                        printf("(%x)CENTER LOSS: %f\n", pid, center_iou);
+
+                        int conf_index = index + 4*lw*lh;
+
+//                        FILE* fpred = fopen(fname_pred, "a");
+//                        fprintf(fpred, "%d %.7f %.7f %.7f %.7f %.7f %.7f\n", 0, x_rec, y_rec, w, h, center_iou, x[conf_index]);
+//                        fclose(fpred);
+
+                        float ax, ay, ah, aw, aiou, aconf;
+                        int aid, cnt, alid;
+                        int found = 0;
+
+                        pred_args_t *buffer;
+//                        char* buffer;
+                        buffer = (pred_args_t*)malloc(1*sizeof (pred_args_t));
+                        int n_char = 0, line_size=67;
+
+                        float best_iou = 0.0f;
+                        int line_nr = -1, line_cnt = 0;
+                        box pred_shift = pred;
+                        if(s_id < 3) {
+//                            pred_shift.x = pred_shift.y = 0.0f;
+                            pred_shift.x = x_init;
+                            pred_shift.y = y_init;
+                        } else {
+                            pred_shift.x = xpred_rec;
+                            pred_shift.y = ypred_rec;
+                        }
+
+                        pred_shift.h = bh;
+                        pred_shift.w = bw;
+
+                        box read_box = {0};
+
+                        if( access( fname_pred, F_OK ) == 0 ) {
+//                            printf("\n\n\n FOUNNNNNND \n\n\n\n");
+
+                            FILE* fpred = fopen(fname_pred, "r");
+
+                            while(fscanf(fpred, "%d %d %f %f %f %f %f %f %d\n", &aid, &alid, &ax, &ay, &aw, &ah, &aiou, &aconf, &cnt) == 9) {
+                                if ((aid == id) &&
+                                    (label_id == alid)){
+//                                    (fabs(x_init-ax) < 2*FLT_EPSILON) &&
+//                                    (fabs(y_init-ay) < 2*FLT_EPSILON) ){
+//                                    found = 1;
+                                    read_box.x = ax;
+                                    read_box.y = ay;
+                                    read_box.w = aw;
+                                    read_box.h = ah;
+
+                                    float iou = box_iou(pred_shift, read_box);
+
+                                    if ((iou > 0.75f) && (iou > best_iou)) {
+//                                    if ((iou > best_iou)) {
+                                        line_nr = line_cnt;
+                                        best_iou = iou;
+                                        found = 1;
+                                    }
+                                }
+
+                                buffer = (pred_args_t*)xrealloc(buffer, (line_cnt+1)*sizeof(pred_args_t));
+
+                                buffer[line_cnt].id   = aid;
+                                buffer[line_cnt].lid  = alid;
+                                buffer[line_cnt].x    = ax;
+                                buffer[line_cnt].y    = ay;
+                                buffer[line_cnt].w    = aw;
+                                buffer[line_cnt].h    = ah;
+                                buffer[line_cnt].loss = aiou;
+                                buffer[line_cnt].conf = aconf;
+                                buffer[line_cnt].cnt  = cnt;
+
+                                line_cnt++;
+                            }
+                            fclose(fpred);
+
+                            if (line_nr > -1) { // Found similar
+                                buffer[line_nr].cnt++;
+                                if(s_id==3) { // Only label. Working with predictions
+                                    buffer[line_nr].x += (xpred_rec-buffer[line_nr].x)/buffer[line_nr].cnt;
+                                    buffer[line_nr].y += (ypred_rec-buffer[line_nr].y)/buffer[line_nr].cnt;
+                                }
+                                buffer[line_nr].w += (bw-buffer[line_nr].w)/buffer[line_nr].cnt;
+                                buffer[line_nr].h += (bh-buffer[line_nr].h)/buffer[line_nr].cnt;
+                                buffer[line_nr].loss += (center_iou-buffer[line_nr].loss)/buffer[line_nr].cnt;
+                                buffer[line_nr].conf += (x[conf_index]-buffer[line_nr].conf)/buffer[line_nr].cnt;
+                            } else {
+                                buffer = (pred_args_t*)xrealloc(buffer, (line_cnt+1)*sizeof(pred_args_t));
+
+                                buffer[line_cnt].id   = id;
+                                buffer[line_cnt].lid  = label_id;
+                                buffer[line_cnt].x    = x_init;
+                                buffer[line_cnt].y    = y_init;
+                                if(s_id==3) { // Only label. Working with predictions
+                                    buffer[line_cnt].x    = xpred_rec;
+                                    buffer[line_cnt].y    = ypred_rec;
+                                }
+                                buffer[line_cnt].w    = bw;
+                                buffer[line_cnt].h    = bh;
+                                buffer[line_cnt].loss = center_iou;
+                                buffer[line_cnt].conf = x[conf_index];
+                                buffer[line_cnt].cnt  = 1;
+
+                                line_cnt++;
+                            }
+
+                            for (int k = 0; k < line_cnt-1; k++) {
+                                if(buffer[k].cnt == 0) {
+                                    continue;
+                                }
+
+                                box box1 = {0};
+                                box1.x = buffer[k].x;
+                                box1.y = buffer[k].y;
+                                box1.w = buffer[k].w;
+                                box1.h = buffer[k].h;
+
+                                for (int l = k+1; l <line_cnt; l++) {
+
+                                    if((buffer[k].id == buffer[l].id) && (buffer[k].lid == buffer[l].lid)) {
+
+                                        box box2 = {0};
+                                        box2.x = buffer[l].x;
+                                        box2.y = buffer[l].y;
+                                        box2.w = buffer[l].w;
+                                        box2.h = buffer[l].h;
+
+                                        float iou = box_iou(box1, box2);
+                                        if(iou > 0.75f) { //Merge boxes
+                                            buffer[k].x = (buffer[k].x*buffer[k].cnt + buffer[l].x*buffer[l].cnt)/(buffer[k].cnt + buffer[l].cnt);
+                                            buffer[k].y = (buffer[k].y*buffer[k].cnt + buffer[l].y*buffer[l].cnt)/(buffer[k].cnt + buffer[l].cnt);
+                                            buffer[k].w = (buffer[k].w*buffer[k].cnt + buffer[l].w*buffer[l].cnt)/(buffer[k].cnt + buffer[l].cnt);
+                                            buffer[k].h = (buffer[k].h*buffer[k].cnt + buffer[l].h*buffer[l].cnt)/(buffer[k].cnt + buffer[l].cnt);
+                                            buffer[k].loss = (buffer[k].loss*buffer[k].cnt + buffer[l].loss*buffer[l].cnt)/(buffer[k].cnt + buffer[l].cnt);
+                                            buffer[k].conf = (buffer[k].conf*buffer[k].cnt + buffer[l].conf*buffer[l].cnt)/(buffer[k].cnt + buffer[l].cnt);
+                                            buffer[k].cnt += buffer[l].cnt;
+                                            buffer[l].cnt = 0;
+                                            printf("\n\n(%x)BOX MERGED %s\n\n", pid, fname_base);
+                                        }
+
+                                    }
+                                }
+                            }
+
+
+
+
+
+
+//                            fpred = fopen(fname_pred, "r");
+
+//                            line_cnt = 0;
+//                            while(fscanf(fpred, "%d %f %f %f %f %f %f %d\n", &aid, &ax, &ay, &aw, &ah, &aloss, &aconf, &cnt) == 8) {
+//                                n_char+=line_size; // All line plus \n
+//                                buffer = realloc(buffer, n_char+1);
+
+//                                if (line_nr == line_cnt){
+//                                    cnt++;
+//                                    sprintf(buffer+(n_char-line_size), "%d %.7f %.7f %.7f %.7f %.7f %.7f %d\n", id, x_init, y_init, aw + (w-aw)/cnt, ah + (h-ah)/cnt, aloss + (center_iou-aloss)/cnt, aconf + (x[conf_index]-aconf)/cnt, cnt);
+//                                }
+//                                else {
+//                                    sprintf(buffer+(n_char-line_size), "%d %.7f %.7f %.7f %.7f %.7f %.7f %d\n", aid, ax, ay, aw, ah, aloss, aconf, cnt);
+//                                }
+//                                line_cnt++;
+//                            }
+//                            fclose(fpred);
+
+//                            if (found == 0){
+//                                // ADD Line
+//                                cnt = 1;
+//                                n_char+=line_size; // All line plus \n
+//                                buffer = realloc(buffer, n_char+1);
+//                                sprintf(buffer+(n_char-line_size), "%d %.7f %.7f %.7f %.7f %.7f %.7f %d\n", id, x_init, y_init, w, h, center_iou, x[conf_index], cnt);
+////                                        fprintf(fw, "%d %.7f %.7f %.7f %.7f\n", sid, sx, sy, sw, sh);
+//                            }
+
+//                            printf("%d\n %s \n\n\n\n", line_cnt, buffer);
+
+                            FILE* fw = fopen(fname_pred, "w");
+//                            buffer[n_char] = '\0';
+//                            fprintf(fw, "%s", buffer);
+                            for (int iter = 0; iter<line_cnt; iter++)
+                            {
+                                if(buffer[iter].cnt > 0) {
+                                    fprintf(fw, "%d %d %.7f %.7f %.7f %.7f %.7f %.7f %d\n", buffer[iter].id, buffer[iter].lid, buffer[iter].x, buffer[iter].y, buffer[iter].w, buffer[iter].h, buffer[iter].loss, buffer[iter].conf, buffer[iter].cnt);
+                                }
+                            }
+                            fclose(fw);
+                            free(buffer);
+                        } else {
+                            // file doesn't exist
+                            printf("FILE PRED DOES NOT EXIST\n");
+                            cnt = 1;
+                            FILE* fw = fopen(fname_pred, "w");
+                            fprintf(fw, "%d %d %.7f %.7f %.7f %.7f %.7f %.7f %d\n", id, label_id, (s_id==3 ? xpred_rec : x_init), (s_id==3 ? ypred_rec : y_init), bw, bh, center_iou, x[conf_index], cnt);
+                            fclose(fw);
+                        }
+                    }
+
+                    fclose(fscale);
+
+//                    fscale = fopen(fname_scale, "w");
+//                    fprintf(fscale, "%d %.7f %.7f %.7f %.7f %d\n", 1, dx, dy, sw, sh, flip);
+//                    fclose(fscale);
+                }
+            }
+
+            free(fname_init);
+            free(fname_scale);
+            free(fname_pred);
+
+        }
+
+    }
+
+    free(fname_base);
+
+
+
+//    b.y = (j + x[index + 1 * stride])
+//    printf("BOX PRED: %f %f %f %f %f %d\n", pred.x, pred.y, pred.w, pred.h, x[index + 4 * stride], stride);
+//    pred = get_yolo_box(x, biases, n, index+1, i, j, lw, lh, w, h, stride, new_coords);
+//    printf("BOX PRED3: %f %f %f %f %f %d\n", pred.x, pred.y, pred.w, pred.h, x[index+1 + 4 * stride], stride);
+
 //    printf("\n\n\n\n\nVALUES %f %f %f %f %f %f %f %f %f %d\n", truth.x, truth.y, pred.x, pred.y, truth.w, truth.h, pred.w, pred.h, all_ious.iou, iou_loss);
+
+//    printf("VAL X: %f VAL Y: %f\n", fabs(pred.x-truth.x)/truth.w, fabs(pred.y-truth.y)/truth.h);
+
+    float ex = fabs(pred.x-truth.x)/pred.w, ey = fabs(pred.y-truth.y)/pred.h;
+    all_ious.ciou = sqrt(ex*ex+ey*ey);
 
 //    if(all_ious.iou > 2*FLT_EPSILON) {
     if(0) {
@@ -402,6 +784,12 @@ ious delta_yolo_box(int update_delta, box truth, float *x, float *biases, int n,
     // avoid nan in dx_box_iou
     if (pred.w == 0) { pred.w = 1.0; }
     if (pred.h == 0) { pred.h = 1.0; }
+
+    float scale_n_el = 1.f;
+    if (num_elems > 1) {
+        scale_n_el /= num_elems*10;
+    }
+
     if (iou_loss == MSE)    // old loss
 //    if(0)
     {
@@ -409,6 +797,11 @@ ious delta_yolo_box(int update_delta, box truth, float *x, float *biases, int n,
         float ty = (truth.y*lh - j);
         float tw = log(truth.w*w / biases[2 * n]);
         float th = log(truth.h*h / biases[2 * n + 1]);
+
+//        if ((s_id > 2)) {
+//            tx = (pred.x*lw - i);
+//            ty = (pred.y*lh - j);
+//        }
 
         if (new_coords) {
             //tx = (truth.x*lw - i + 0.5) / 2;
@@ -421,10 +814,39 @@ ious delta_yolo_box(int update_delta, box truth, float *x, float *biases, int n,
         //printf(" x = %f, y = %f, w = %f, h = %f \n", x[index + 0 * stride], x[index + 1 * stride], x[index + 2 * stride], x[index + 3 * stride]);
 
         // accumulate delta
-        delta[index + 0 * stride] += scale * (tx - x[index + 0 * stride]) * iou_normalizer;
-        delta[index + 1 * stride] += scale * (ty - x[index + 1 * stride]) * iou_normalizer;
-        delta[index + 2 * stride] += scale * (tw - x[index + 2 * stride]) * iou_normalizer;
-        delta[index + 3 * stride] += scale * (th - x[index + 3 * stride]) * iou_normalizer;
+
+        if ((s_id == 4)) {
+            delta[index + 0 * stride] += scale * (tx - x[index + 0 * stride]) * iou_normalizer * (alpha);// * scale_n_el;
+            delta[index + 1 * stride] += scale * (ty - x[index + 1 * stride]) * iou_normalizer * (alpha);// * scale_n_el;
+        } else if (s_id < 3) {
+            delta[index + 0 * stride] += scale * (tx - x[index + 0 * stride]) * iou_normalizer;// * scale_n_el;
+            delta[index + 1 * stride] += scale * (ty - x[index + 1 * stride]) * iou_normalizer;// * scale_n_el;
+        }
+
+        if (s_id == 0){
+            delta[index + 2 * stride] += scale * (tw - x[index + 2 * stride]) * iou_normalizer;// * scale_n_el * (num_elems==1);
+            delta[index + 3 * stride] += scale * (th - x[index + 3 * stride]) * iou_normalizer;// * scale_n_el * (num_elems==1);
+        }
+        else if ((s_id == 2) || (s_id == 4)) {
+            delta[index + 2 * stride] += scale * (tw - x[index + 2 * stride]) * iou_normalizer*alpha;// * scale_n_el * (num_elems==1);
+            delta[index + 3 * stride] += scale * (th - x[index + 3 * stride]) * iou_normalizer*alpha;
+//            float dtop = ((pred.y-pred.h/2) - truth.y);
+//            float dbottom = (truth.y - (pred.y+pred.h/2));
+//            if(dtop > 0.0f) { // Above box
+//                delta[index + 3 * stride] += sqrt(dtop*h / (4 * biases[2 * n + 1]));
+//            } else if(dbottom > 0.0f) { // Below box
+//                delta[index + 3 * stride] += sqrt(dbottom*h / (4 * biases[2 * n + 1]));
+//            }
+
+//            float dleft  = ((pred.x-pred.w/2) - truth.x);
+//            float dright = (truth.x - (pred.x+pred.w/2));
+
+//            if(dleft > 0.0f) { // Above box
+//                delta[index + 2 * stride] += sqrt(dleft*w / (4 * biases[2 * n + 1]));
+//            } else if(dright > 0.0f) { // Below box
+//                delta[index + 2 * stride] += sqrt(dright*w / (4 * biases[2 * n + 1]));
+//            }
+        }
     }
     else{
         // https://github.com/generalized-iou/g-darknet
@@ -494,10 +916,10 @@ ious delta_yolo_box(int update_delta, box truth, float *x, float *biases, int n,
         }
 
         // accumulate delta
-        delta[index + 0 * stride] += dx;
-        delta[index + 1 * stride] += dy;
-        delta[index + 2 * stride] += dw;
-        delta[index + 3 * stride] += dh;
+        delta[index + 0 * stride] += dx*scale_n_el;
+        delta[index + 1 * stride] += dy*scale_n_el;
+        delta[index + 2 * stride] += dw*scale_n_el;
+        delta[index + 3 * stride] += dh*scale_n_el;
     }
 
     return all_ious;
@@ -669,97 +1091,291 @@ void *process_batch(void* ptr)
         //int count = 0;
         //int class_count = 0;
 
-        for (j = 0; j < l.h; ++j) {
-            for (i = 0; i < l.w; ++i) {
-                for (n = 0; n < l.n; ++n) {
-                    const int class_index = entry_index(l, b, n * l.w * l.h + j * l.w + i, 4 + 1);
-                    const int obj_index = entry_index(l, b, n * l.w * l.h + j * l.w + i, 4);
-                    const int box_index = entry_index(l, b, n * l.w * l.h + j * l.w + i, 0);
-                    const int stride = l.w * l.h;
-                    box pred = get_yolo_box(l.output, l.biases, l.mask[n], box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.w * l.h, l.new_coords);
-                    float best_match_iou = 0;
-                    int best_match_t = 0;
-                    float best_iou = 0;
-                    int best_t = 0;
-                    for (t = 0; t < l.max_boxes; ++t) {
-                        box truth = float_to_box_stride(state.truth + t * l.truth_size + b * l.truths, 1);
-                        if (!truth.x) break;  // continue;
-                        int class_id = state.truth[t * l.truth_size + b * l.truths + 4];
-                        if (class_id >= l.classes || class_id < 0) {
-                            printf("\n Warning: in txt-labels class_id=%d >= classes=%d in cfg-file. In txt-labels class_id should be [from 0 to %d] \n", class_id, l.classes, l.classes - 1);
-                            printf("\n truth.x = %f, truth.y = %f, truth.w = %f, truth.h = %f, class_id = %d \n", truth.x, truth.y, truth.w, truth.h, class_id);
-                            if (check_mistakes) getchar();
-                            continue; // if label contains class_id more than number of classes in the cfg-file and class_id check garbage value
-                        }
+        pid_t pid = syscall(__NR_gettid);
 
-                        float objectness = l.output[obj_index];
-                        if (isnan(objectness) || isinf(objectness)) l.output[obj_index] = 0;
-                        int class_id_match = compare_yolo_class(l.output, l.classes, class_index, l.w * l.h, objectness, class_id, 0.25f);
 
-                        float iou = box_iou(pred, truth);
-                        if (iou > best_match_iou && class_id_match == 1) {
-                            best_match_iou = iou;
-                            best_match_t = t;
-                        }
-                        if (iou > best_iou) {
-                            best_iou = iou;
-                            best_t = t;
-                        }
-                    }
+        typedef struct scale_augment {
+            float x;
+            float y;
+            float dx;
+            float dy;
+            float sw;
+            float sh;
+            int flip;
+        } scale_augment_t;
 
-                    avg_anyobj += l.output[obj_index];
-                    l.delta[obj_index] = l.obj_normalizer * (0 - l.output[obj_index]);
-                    if (best_match_iou > l.ignore_thresh) {
-                        if (l.objectness_smooth) {
-                            const float delta_obj = l.obj_normalizer * (best_match_iou - l.output[obj_index]);
-                            if (delta_obj > l.delta[obj_index]) l.delta[obj_index] = delta_obj;
+        scale_augment_t init_scales = {0};
 
-                        }
-                        else l.delta[obj_index] = 0;
-                    }
-                    else if (state.net.adversarial) {
-                        int stride = l.w * l.h;
-                        float scale = pred.w * pred.h;
-                        if (scale > 0) scale = sqrt(scale);
-                        l.delta[obj_index] = scale * l.obj_normalizer * (0 - l.output[obj_index]);
-                        int cl_id;
-                        int found_object = 0;
-                        for (cl_id = 0; cl_id < l.classes; ++cl_id) {
-                            if (l.output[class_index + stride * cl_id] * l.output[obj_index] > 0.25) {
-                                l.delta[class_index + stride * cl_id] = scale * (0 - l.output[class_index + stride * cl_id]);
-                                found_object = 1;
+        typedef struct objectnessij {
+            float obj;
+            int i;
+            int j;
+        } objectnessij_t;
+
+        objectnessij_t* objects = (objectnessij_t*)xcalloc(1, sizeof(objectnessij_t));
+        uint32_t number_of_t = 0;
+        objects[number_of_t].obj = 0.0f;
+        objects[number_of_t].i = 0;
+        objects[number_of_t].j = 0;
+
+        char* fname_base_i = (char*)malloc(100*sizeof(char));
+        char* fname_hash_i = (char*)malloc(100*sizeof (char));
+
+//        int* allowed_t = (int*)xcalloc(1,sizeof(int));
+        int* sid_t = (int*)xcalloc(1,sizeof(int));
+        uint32_t count_allowed = 0;
+
+        for (t = 0; t < l.max_boxes; ++t) {
+            box truth = float_to_box_stride(state.truth + t * l.truth_size + b * l.truths, 1);
+            if (!truth.x) break;
+
+            int sid, lid, tid;
+            tid = (int)state.truth[t * l.truth_size + b * l.truths + 5];
+
+            sprintf(fname_hash_i, "hash/%d.txt", tid);
+            if( access( fname_hash_i, F_OK ) == 0 ) {
+                FILE* fhash = fopen(fname_hash_i, "r");
+                if(fscanf(fhash, "%d %d %s\n", &sid, &lid, fname_base_i) != 3) {
+                    printf("HASH FILE INCORRECT INIT %d %d %d %s\n", tid, sid, lid, fname_base_i);
+                    continue;
+//                    exit(0);
+                }
+                fclose(fhash);
+            } else {
+                printf("NO FILE HASH FOUND INIT %s\n", fname_hash_i);
+                continue;
+//                exit(0);
+            }
+
+            sid_t[count_allowed] = sid;
+            count_allowed++;
+            sid_t = (int*)xrealloc(sid_t, (count_allowed+1)*sizeof(int));
+
+//            if (sid == 3) { // Only label
+//                continue;
+//            } else {
+//                allowed_t[count_allowed] = t;
+//                sid_t[count_allowed] = sid;
+//                count_allowed++;
+
+//                allowed_t = (int*)xrealloc(allowed_t, (count_allowed+1)*sizeof(int));
+//                sid_t = (int*)xrealloc(sid_t, (count_allowed+1)*sizeof(int));
+//            }
+        }
+        free(fname_base_i);
+        free(fname_hash_i);
+
+//        if(count_allowed > 0) {
+
+            // RUNS ON EACH IMAGE CELL (j, i) and anchor n
+            for (j = 0; j < l.h; ++j) { //printf("[%d] LAYER H->J: %d\n",pid,j);
+                for (i = 0; i < l.w; ++i) { //printf("[%d] LAYER W->I: %d\n",pid,i);
+                    for (n = 0; n < l.n; ++n) {
+                        const int class_index = entry_index(l, b, n * l.w * l.h + j * l.w + i, 4 + 1);
+                        const int obj_index = entry_index(l, b, n * l.w * l.h + j * l.w + i, 4); // objecteness
+                        const int box_index = entry_index(l, b, n * l.w * l.h + j * l.w + i, 0);
+                        const int stride = l.w * l.h;
+
+//                        printf("NUMBER OF T: %d %d %d %d %d\n", number_of_t, j, i, n, l.n);
+
+// >>>>>>>>>>>>>> COMMENTED
+                        if (((j>0) || (i>0) || (n>0)) && (number_of_t>0)) {
+                            float objectn = l.output[obj_index];
+                            if (isnan(objectn) || isinf(objectn)) objectn = 0;
+                            objectn *= l.output[class_index];
+
+                            int found_ij = 0;
+                            for (int a = 0; a < number_of_t; a++) {
+                                if ((objects[a].i == i) && (objects[a].j == j)) { // Found same ij
+
+                                    if(objects[a].obj > objectn) {
+                                        found_ij = 1; // Found better ij
+                                        break;
+                                    }
+
+                                    for (int b = a; b < number_of_t-1; b++) {
+                                        objects[b].obj = objects[b+1].obj;
+                                        objects[b].i = objects[b+1].i;
+                                        objects[b].j = objects[b+1].j;
+                                    }
+
+                                    objects[number_of_t-1].obj = -1.0f; // Ensure the next if/for will work.
+
+                                }
+                            }
+
+
+                            if ((found_ij == 0) && (objectn > objects[number_of_t-1].obj)) {
+                                objects[number_of_t-1].obj = objectn;
+                                objects[number_of_t-1].i = i;
+                                objects[number_of_t-1].j = j;
+
+//                                if (number_of_t > 1) {
+                                    for (int a = number_of_t-2; a >= 0; a--) {
+                                        if(objectn > objects[a].obj) {
+                                            objects[a+1].obj = objects[a].obj;
+                                            objects[a+1].i = objects[a].i;
+                                            objects[a+1].j = objects[a].j;
+
+                                            objects[a].obj = objectn;
+                                            objects[a].i = i;
+                                            objects[a].j = j;
+                                        } else {
+                                            break; // No need to keep searching
+                                        }
+                                    }
+//                                }
                             }
                         }
-                        if (found_object) {
-                            // don't use this loop for adversarial attack drawing
-                            for (cl_id = 0; cl_id < l.classes; ++cl_id)
-                                if (l.output[class_index + stride * cl_id] * l.output[obj_index] < 0.25)
-                                    l.delta[class_index + stride * cl_id] = scale * (1 - l.output[class_index + stride * cl_id]);
+// <<<<<<<<<<<<<<<< COMMENTED
 
-                            l.delta[box_index + 0 * stride] += scale * (0 - l.output[box_index + 0 * stride]);
-                            l.delta[box_index + 1 * stride] += scale * (0 - l.output[box_index + 1 * stride]);
-                            l.delta[box_index + 2 * stride] += scale * (0 - l.output[box_index + 2 * stride]);
-                            l.delta[box_index + 3 * stride] += scale * (0 - l.output[box_index + 3 * stride]);
+
+                        box pred = get_yolo_box(l.output, l.biases, l.mask[n], box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.w * l.h, l.new_coords);
+                        float best_match_iou = 0;
+                        int best_match_t = 0;
+                        float best_iou = 0;
+                        int best_t = 0;
+                        int best_sid = 0;
+
+                        for (t = 0; t < l.max_boxes; ++t) {
+//                        uint32_t iter = 0;
+//                        while (iter < count_allowed) {
+//                            t = allowed_t[iter];
+//                            iter++;
+
+                            box truth = float_to_box_stride(state.truth + t * l.truth_size + b * l.truths, 1);
+                            if (!truth.x) break;  // continue;
+                            int class_id = state.truth[t * l.truth_size + b * l.truths + 4];
+                            if (class_id >= l.classes || class_id < 0) {
+                                printf("\n Warning: in txt-labels class_id=%d >= classes=%d in cfg-file. In txt-labels class_id should be [from 0 to %d] \n", class_id, l.classes, l.classes - 1);
+                                printf("\n truth.x = %f, truth.y = %f, truth.w = %f, truth.h = %f, class_id = %d \n", truth.x, truth.y, truth.w, truth.h, class_id);
+                                if (check_mistakes) getchar();
+                                continue; // if label contains class_id more than number of classes in the cfg-file and class_id check garbage value
+                            }
+
+                            float objectness = l.output[obj_index];
+                            if (isnan(objectness) || isinf(objectness)) l.output[obj_index] = 0;
+                            int class_id_match = compare_yolo_class(l.output, l.classes, class_index, l.w * l.h, objectness, class_id, 0.25f);
+
+                            float iou = box_iou(pred, truth);
+                            if (iou > best_match_iou && class_id_match == 1) {
+                                best_match_iou = iou;
+                                best_match_t = t;
+                            }
+                            if (iou > best_iou) {
+                                best_iou = iou;
+                                best_t = t;
+                                best_sid = sid_t[t];
+                            }
+
+// >>>>>>>>>>>>>> COMMENTED
+                            if ((j==0) && (i==0) && (n==0)) { // Create the array
+                                objects[number_of_t].obj = t==0 ? l.output[obj_index]*l.output[class_index] : -1.0f;
+                                objects[number_of_t].i = i;
+                                objects[number_of_t].j = j;
+                                number_of_t++;
+                                objects = (objectnessij_t*)xrealloc(objects, (number_of_t+1)*sizeof (objectnessij_t));
+                            }
+// >>>>>>>>>>>>>> COMMENTED
+
+
+//                            if (l.output[obj_index]*l.output[class_index] > objects[t].obj) {
+//                                objects[t].obj = l.output[obj_index]*l.output[class_index];
+//                                objects[t].i = i;
+//                                objects[t].j = j;
+//                            }
+
+//                            if((uint32_t)t == number_of_t) {
+//                                number_of_t++;
+//                                objects = (objectnessij_t*)xrealloc(objects, (number_of_t+1)*sizeof (objectnessij_t));
+//                                objects[number_of_t].obj = -1.0f;
+//                                objects[number_of_t].i = i;
+//                                objects[number_of_t].j = j;
+//                            }
                         }
-                    }
-                    if (best_iou > l.truth_thresh) {
-                        const float iou_multiplier = best_iou * best_iou;// (best_iou - l.truth_thresh) / (1.0 - l.truth_thresh);
-                        if (l.objectness_smooth) l.delta[obj_index] = l.obj_normalizer * (iou_multiplier - l.output[obj_index]);
-                        else l.delta[obj_index] = l.obj_normalizer * (1 - l.output[obj_index]);
-                        //l.delta[obj_index] = l.obj_normalizer * (1 - l.output[obj_index]);
 
-                        int class_id = state.truth[best_t * l.truth_size + b * l.truths + 4];
-                        if (l.map) class_id = l.map[class_id];
-                        delta_yolo_class(l.output, l.delta, class_index, class_id, l.classes, l.w * l.h, 0, l.focal_loss, l.label_smooth_eps, l.classes_multipliers, l.cls_normalizer);
-                        const float class_multiplier = (l.classes_multipliers) ? l.classes_multipliers[class_id] : 1.0f;
-                        if (l.objectness_smooth) l.delta[class_index + stride * class_id] = class_multiplier * (iou_multiplier - l.output[class_index + stride * class_id]);
-                        box truth = float_to_box_stride(state.truth + best_t * l.truth_size + b * l.truths, 1);
-                        delta_yolo_box(1, truth, l.output, l.biases, l.mask[n], box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
-                        (*state.net.total_bbox)++;
+//                        if((best_t == 0) && (best_iou < 0.001f)) {
+//                            continue;
+//                        }
+
+    //                    printf("OBJECTNESS SMOTH: %d MATCH: %f IGNORE: %f ADV: %d BEST: %f TRUTH: %f\n", l.objectness_smooth, best_match_iou, l.ignore_thresh, state.net.adversarial, best_iou, l.truth_thresh);
+
+                        avg_anyobj += l.output[obj_index];
+                        l.delta[obj_index] = l.obj_normalizer * (0 - l.output[obj_index]);
+                        if (best_match_iou > l.ignore_thresh) {
+                            if (l.objectness_smooth) {
+                                const float delta_obj = l.obj_normalizer * (best_match_iou - l.output[obj_index]);
+                                if (delta_obj > l.delta[obj_index]) l.delta[obj_index] = delta_obj;
+
+                            }
+                            else l.delta[obj_index] = 0;
+                        }
+                        else if (state.net.adversarial) {
+                            int stride = l.w * l.h;
+                            float scale = pred.w * pred.h;
+                            if (scale > 0) scale = sqrt(scale);
+                            l.delta[obj_index] = scale * l.obj_normalizer * (0 - l.output[obj_index]);
+                            int cl_id;
+                            int found_object = 0;
+                            for (cl_id = 0; cl_id < l.classes; ++cl_id) {
+                                if (l.output[class_index + stride * cl_id] * l.output[obj_index] > 0.25) {
+                                    l.delta[class_index + stride * cl_id] = scale * (0 - l.output[class_index + stride * cl_id]);
+                                    found_object = 1;
+                                }
+                            }
+                            if (found_object) {
+                                // don't use this loop for adversarial attack drawing
+                                for (cl_id = 0; cl_id < l.classes; ++cl_id)
+                                    if (l.output[class_index + stride * cl_id] * l.output[obj_index] < 0.25)
+                                        l.delta[class_index + stride * cl_id] = scale * (1 - l.output[class_index + stride * cl_id]);
+
+//                                l.delta[box_index + 0 * stride] += scale * (0 - l.output[box_index + 0 * stride]); // * (1-0.5f*(best_sid==4));
+//                                l.delta[box_index + 1 * stride] += scale * (0 - l.output[box_index + 1 * stride]); // * (1-0.5f*(best_sid==4));
+//                                l.delta[box_index + 2 * stride] += scale * (0 - l.output[box_index + 2 * stride]); // * (0.5f+0.5f*(best_sid>0));
+//                                l.delta[box_index + 3 * stride] += scale * (0 - l.output[box_index + 3 * stride]); // * (0.5f+0.5f*(best_sid>0));
+                                float alpha = 0.75f;
+                                float beta = 0.5f;
+
+                                if(best_sid < 3) {
+                                    l.delta[box_index + 0 * stride] += scale * (0 - l.output[box_index + 0 * stride]);
+                                    l.delta[box_index + 1 * stride] += scale * (0 - l.output[box_index + 1 * stride]);
+                                } else if (best_sid==4) {
+                                    l.delta[box_index + 0 * stride] += scale * (0 - l.output[box_index + 0 * stride]) * (alpha);
+                                    l.delta[box_index + 1 * stride] += scale * (0 - l.output[box_index + 1 * stride]) * (alpha);
+                                }
+                                if(best_sid != 3) {
+                                    l.delta[box_index + 2 * stride] += scale * (0 - l.output[box_index + 2 * stride]) * (alpha+(1-alpha)*(best_sid==0)); // 1 if fully annotated
+                                    l.delta[box_index + 3 * stride] += scale * (0 - l.output[box_index + 3 * stride]) * (alpha+(1-alpha)*(best_sid==0));
+                                }
+                            }
+                        }
+//                        printf("\n\nTRUTH THRESHHHH %f\n\n", l.truth_thresh);
+                        if (best_iou > l.truth_thresh) { // Probably never enters here l.truth_thresh = 1 by default
+                            const float iou_multiplier = best_iou * best_iou;// (best_iou - l.truth_thresh) / (1.0 - l.truth_thresh);
+                            if (l.objectness_smooth) l.delta[obj_index] = l.obj_normalizer * (iou_multiplier - l.output[obj_index]);
+                            else l.delta[obj_index] = l.obj_normalizer * (1 - l.output[obj_index]);
+                            //l.delta[obj_index] = l.obj_normalizer * (1 - l.output[obj_index]);
+
+                            int class_id = state.truth[best_t * l.truth_size + b * l.truths + 4];
+                            if (l.map) class_id = l.map[class_id];
+                            delta_yolo_class(l.output, l.delta, class_index, class_id, l.classes, l.w * l.h, 0, l.focal_loss, l.label_smooth_eps, l.classes_multipliers, l.cls_normalizer);
+                            const float class_multiplier = (l.classes_multipliers) ? l.classes_multipliers[class_id] : 1.0f;
+                            if (l.objectness_smooth) l.delta[class_index + stride * class_id] = class_multiplier * (iou_multiplier - l.output[class_index + stride * class_id]);
+                            box truth = float_to_box_stride(state.truth + best_t * l.truth_size + b * l.truths, 1);
+    //                        delta_yolo_box((int)(state.truth[box_index * l.truth_size + b * l.truths + 5]), 1, 1, truth, l.output, l.biases, l.mask[n], box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
+                            delta_yolo_box((int)(state.truth[box_index * l.truth_size + b * l.truths + 5]), 1, 1, truth, l.output, l.biases, l.mask[n], box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
+
+                            (*state.net.total_bbox)++;
+                        }
                     }
                 }
             }
-        }
+//        }
+
+////        free(fname_base_i);
+////        free(fname_hash_i);
+//        free(allowed_t);
+        free(sid_t);
 
         float tx_ant=-1.0, ty_ant=-1.0, min_loss=0.0, acc_loss=0.0;
         int skip_loss = 0;
@@ -787,8 +1403,12 @@ void *process_batch(void* ptr)
         int n_valid = 0;
 
         typedef struct box_group {
+            int track_id;
+            int *sample_id;
             float x;
             float y;
+            float w;
+            float h;
             int nelem;
             int *telem;
             float *loss;
@@ -803,6 +1423,15 @@ void *process_batch(void* ptr)
 
         int all_evaluated = 0;
 
+        group_boxes = (box_group_t*)malloc(sizeof(box_group_t));
+        group_boxes[0].nelem = 1;
+        group_boxes[0].telem = (int *)malloc(group_boxes[0].nelem*sizeof(int));
+        group_boxes[0].sample_id = (int *)malloc(group_boxes[0].nelem*sizeof(int));
+        group_boxes[0].loss  = (float *)malloc(group_boxes[0].nelem*sizeof(float));
+
+
+
+        printf("\nINIT PROCESS:\n");
 //        for (t = 0; t < l.max_boxes; ++t) {
         while(t < l.max_boxes){
 
@@ -813,26 +1442,19 @@ void *process_batch(void* ptr)
             int best_n = 0;
             box truth_shift = truth;
 
-            if (!truth.x)
+            if (!truth.x) // No more true boxes
             {
-//               t_ant = t;
-//               t = min_box_idx;
-//               final = 1;
-//               update_delta = 1;
-//               if(t < 0)
-//                   break;
-//               continue;
-                if(group_boxes == NULL){
+                break;
+
+                if(group_boxes == NULL){ // If all evaluated already.
                     break;
                 }
 
                 all_evaluated = 1;
                 current_group = 0;
-            }//break;  // continue;
+            }
 
             else {
-
-
 
                 if (truth.x < 0 || truth.y < 0 || truth.x > 1 || truth.y > 1 || truth.w < 0 || truth.h < 0) {
                     char buff[256];
@@ -844,17 +1466,18 @@ void *process_batch(void* ptr)
                 int class_id = state.truth[t * l.truth_size + b * l.truths + 4];
                 if (class_id >= l.classes || class_id < 0) continue; // if label contains class_id more than number of classes in the cfg-file and class_id check garbage value
 
-//                float best_iou = 0;
-//                int best_n = 0;
+                //  float best_iou = 0;
+                //  int best_n = 0;
                 i = (truth.x * l.w);
                 j = (truth.y * l.h);
-//                box truth_shift = truth;
+                //  box truth_shift = truth;
                 truth_shift.x = truth_shift.y = 0;
-                for (n = 0; n < l.total; ++n) {
+                for (n = 0; n < l.total; ++n) { // Check best anchor
                     box pred = { 0 };
                     pred.w = l.biases[2 * n] / state.net.w;
                     pred.h = l.biases[2 * n + 1] / state.net.h;
-                    float iou = box_iou(pred, truth_shift);
+//                    printf("[%d] PRED->W: %f  H: %f -- %d %d\n", pid, pred.w, pred.h, l.total, n);
+                    float iou = box_iou(pred, truth_shift); // Compare only width-height
                     if (iou > best_iou) {
                         best_iou = iou;
                         best_n = n;
@@ -862,364 +1485,468 @@ void *process_batch(void* ptr)
                 }
             }
 
-            if (all_evaluated == 0) {
-//                printf("BOX: %d %f %f %f %f\n", t, truth.x, truth.y, truth.w, truth.h);
+//            int t_id = (*(int*)(&state.truth[t * l.truth_size + b * l.truths + 5]))%1000000;
+//            t_id += ((int)(*(int*)(&state.truth[t * l.truth_size + b * l.truths + 5])/10000000))*10000000;
 
-                if (group_boxes == NULL) {
-                    num_boxes++;
-                    group_boxes = (box_group_t*)malloc(num_boxes*sizeof(box_group_t));
-                    group_boxes[0].x = truth.x;
-                    group_boxes[0].y = truth.y;
-                    group_boxes[0].nelem = 1;
-                    group_boxes[0].telem = (int *)malloc(group_boxes[0].nelem*sizeof(int));
-                    group_boxes[0].loss  = (float *)malloc(group_boxes[0].nelem*sizeof(float));
-    //                *(group_boxes[0].telem) = t;
-                    group_boxes[0].telem[0] = t;
-                    current_group = 0;
-                    current_item = 0;
-                } else {
-                    int i = 0;
-                    for (i=0; i < num_boxes; i++)
-                    {
-                        if ((fabs(group_boxes[i].x-truth.x)>2*FLT_EPSILON) || (fabs(group_boxes[i].y-truth.y)>2*FLT_EPSILON)) {
-                            continue;
-                        }
+//            int s_id = (int)(*(int*)(&state.truth[t * l.truth_size + b * l.truths + 5])/1000000)%10;
 
-                        group_boxes[i].nelem++;
-                        group_boxes[i].telem = (int *)realloc(group_boxes[i].telem,  group_boxes[i].nelem*sizeof(int));
-                        group_boxes[i].loss  = (float *)realloc(group_boxes[i].loss, group_boxes[i].nelem*sizeof(float));
-                        group_boxes[i].telem[group_boxes[i].nelem-1] = t;
 
-                        current_group = i;
-                        current_item = group_boxes[i].nelem-1;
-                        break;
-                    }
+            int s_id, img_id, label_id, t_id;
+            char* fname_base = (char*)malloc(100*sizeof(char));
 
-                    if (i==num_boxes) //No matching found
-                    {
-                        num_boxes++;
-                        group_boxes = (box_group_t*)realloc(group_boxes, num_boxes*sizeof(box_group_t));
-                        group_boxes[i].x = truth.x;
-                        group_boxes[i].y = truth.y;
-                        group_boxes[i].nelem = 1;
-                        group_boxes[i].telem = (int *)malloc(group_boxes[i].nelem*sizeof(int));
-                        group_boxes[i].loss  = (float *)malloc(group_boxes[i].nelem*sizeof(float));
-    //                    *(group_boxes[num_boxes-1].telem) = t;
-                        group_boxes[i].telem[group_boxes[i].nelem-1] = t;
+            printf("(%x)HERE %d %f\n", pid, (int)state.truth[t * l.truth_size + b * l.truths + 5], state.truth[t * l.truth_size + b * l.truths + 5]);
 
-                        current_group = i;
-                        current_item = group_boxes[i].nelem-1;
-                    }
-                }
-            }
-            else {
-                if (update_delta == 0){
+//            t_id = (*(int*)(&state.truth[t * l.truth_size + b * l.truths + 5]));
+            t_id = (int)state.truth[t * l.truth_size + b * l.truths + 5];
 
-                    float sum_loss = 0.0f;
-                    float scale_zeros = 1.0f;
-                    int nelem_valid = 0;
-                    float zero_loss_prob = 0.1f;
+////            const int truth_in_index = t * l.truth_size + b * l.truths + 5;
+////            const int t_id = state.truth[truth_in_index];
+//            printf("(%x)HERE %d\n", pid, t_id);
 
-                    if(group_boxes[current_group].nelem > 1) {
-//                         printf("ORGANIZED LIST\n");
-                        for (int z = 0; z<group_boxes[current_group].nelem; z++)
-                        {
-                            if(group_boxes[current_group].loss[z] < 2*FLT_EPSILON) {
-                                scale_zeros -= zero_loss_prob; //Give a % for non-overlapping solutions
-                            }
-                            else {
-                                sum_loss += 1.0f/group_boxes[current_group].loss[z];
-                                nelem_valid++;
-                            }
+//            if( access( "current_batch.txt", F_OK ) == 0 ) {
+//                FILE* fbatch = fopen("current_batch.txt", "r");
+//                printf("(%x)HERE2 %d %d\n", pid, t_id, img_id);
 
-//                            printf("ORGANIZED LIST: %d %f\n", group_boxes[current_group].telem[z], group_boxes[current_group].loss[z]);
-                        }
+//                while(fscanf(fbatch, "%d %d %d %s\n", &img_id, &s_id, &label_id, fname_base)==4){
+////                    fscanf(fbatch, "%d %d %d %s\n", &img_id, &s_id, &label_id, fname_base);
 
-                        float scale_prob = 1.0f/(group_boxes[current_group].nelem);
+//                    printf("(%x)HERE3 %d %d\n", pid, t_id, img_id);
+//                    if(t_id == img_id) {
+//                        break;
+//                    }
+//                }
 
-                        if(sum_loss > 2*FLT_EPSILON) {
-                            scale_prob = (1.0/sum_loss);
-                        }
+//                fclose(fbatch);
+//            }
 
-                        float acc_prob = 0.0f;
-                        float prob_chosen = ((float)rand() / RAND_MAX * (1.0f - 0.0f)) + 0.0f;
+            char* fname_hash;
+            fname_hash = (char*)malloc(100*sizeof (char));
 
-    //                            printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", prob_chosen, scale_prob, scale_zeros);
-
-                        for (int z = 0; z<group_boxes[current_group].nelem; z++)
-                        {
-                            if(group_boxes[current_group].loss[z] > 2*FLT_EPSILON){
-                                acc_prob += (((1.0f/group_boxes[current_group].loss[z])*scale_prob) * scale_zeros + zero_loss_prob)/(1 + group_boxes[current_group].nelem*zero_loss_prob - (1-scale_zeros));
-                            }
-                            else {
-                                if (sum_loss < 2*FLT_EPSILON) {
-                                    acc_prob += scale_prob;
-                                }
-                                else {
-                                    acc_prob += zero_loss_prob/(1 + group_boxes[current_group].nelem*zero_loss_prob - (1-scale_zeros));
-                                }
-                            }
-
-    //                                printf("PROB: %f LOSS: %f ID: %d\n", acc_prob, group_boxes[current_group].loss[z], group_boxes[current_group].telem[z]);
-
-                            if(prob_chosen <= acc_prob) {
-                                min_box_idx = group_boxes[current_group].telem[z];
-                                current_item = z;
-    //                                    printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
-                                break;
-                            }
-                        }
-                    }
-                    else {
-                        current_item = 0;
-                        min_box_idx = group_boxes[current_group].telem[0];
-    //                    printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
-                    }
-
-                    t = min_box_idx;
-                    update_delta = 1;
-
-                    current_group++; //To iterate next
+            sprintf(fname_hash, "hash/%d.txt", t_id);
+            if( access( fname_hash, F_OK ) == 0 ) {
+                FILE* fhash = fopen(fname_hash, "r");
+                if(fscanf(fhash, "%d %d %s\n", &s_id, &label_id, fname_base) != 3) {
+                    printf("HASH FILE INCORRECT %d %d %d %s\n", t_id, s_id, label_id, fname_base);
+                    t++;
                     continue;
-
+//                    exit(0);
                 }
+                fclose(fhash);
+            } else {
+                printf("NO FILE HASH FOUND %s\n", fname_hash);
+//                exit(0);
+                t++;
+                continue;
             }
+
+            free(fname_hash);
+
+            printf("(%x)TRACK_ID %d %d\n", pid, t_id, s_id);
+            free(fname_base);
+
+            num_boxes=1;
+//                    group_boxes = (box_group_t*)malloc(num_boxes*sizeof(box_group_t));
+            group_boxes[0].track_id = t_id;
+            group_boxes[0].x = truth.x;
+            group_boxes[0].y = truth.y;
+            group_boxes[0].w = truth.w;
+            group_boxes[0].h = truth.h;
+            group_boxes[0].nelem = 1;
+
+//                *(group_boxes[0].telem) = t;
+            group_boxes[0].telem[0] = t;
+            group_boxes[0].sample_id[0] = s_id;
+            current_group = 0;
+            current_item = 0;
+
+            printf("(%x)X: %f Y: %f W: %f H: %f\n",  pid, truth.x,  truth.y,  truth.w,  truth.h);
+
+            min_box_idx = group_boxes[current_group].telem[0];
+            printf("(%x)[ISOLATED BOX: T: %d G: %d E: %d] %d %f\n", pid, num_boxes, current_group, 0, group_boxes[current_group].telem[0], group_boxes[current_group].loss[0]);
+
+            update_delta = 1;
+
+            if(s_id == 3) {
+                printf("\n\n(%x)CHANGING I J to %d %d %f %d %d\n\n", pid, objects[t].i, objects[t].j, objects[t].obj, l.w, l.h);
+
+                for (uint32_t a=0;a<number_of_t;a++) {
+                    printf("(%x)CONFS %f %d %d %d %d\n", pid, objects[a].obj, (int)state.truth[a * l.truth_size + b * l.truths + 5], objects[a].i, objects[a].j, number_of_t);
+                }
+                i = objects[t].i;
+                j = objects[t].j;
+            }
+
+            {
+//            if (all_evaluated == 0) { // Analysing all boxes first
+
+//            }
+//            else {
+//                if (update_delta == 0){ // Only calculating losses before
+
+//                    float sum_loss = 0.0f;
+//                    float scale_zeros = 1.0f;
+//                    int nelem_valid = 0;
+//                    float zero_loss_prob = 0.1f;
+
+
+
+////                    if(group_boxes[current_group].nelem > 1) {
+//////                      /*  printf("ORGANIZED LIST\n");
+////                        for (int z = 0; z<group_boxes[current_group].nelem; z++)
+////                        {
+////                            if(group_boxes[current_group].loss[z] < 2*FLT_EPSILON) {
+////                                scale_zeros -= zero_loss_prob; //Give a % for non-overlapping solutions
+////                            }
+////                            else {
+////                                sum_loss += 1.0f/group_boxes[current_group].loss[z];
+////                                nelem_valid++;
+////                            }
+//////                            printf("(%x)X: %f Y: %f W: %f H: %f\n",  pid, truth.x,  truth.y,  truth.w,  truth.h);
+
+////                            printf("(%x)[ORGANIZED LIST: T: %d G: %d E: %d] %d %f\n", pid, num_boxes, current_group, z, group_boxes[current_group].telem[z], group_boxes[current_group].loss[z]);
+////                        }
+
+////                        float scale_prob = 1.0f/(group_boxes[current_group].nelem);
+
+////                        if(sum_loss > 2*FLT_EPSILON) {
+////                            scale_prob = (1.0/sum_loss);
+////                        }
+
+////                        float acc_prob = 0.0f;
+////                        float prob_chosen = ((float)rand() / RAND_MAX * (1.0f - 0.0f)) + 0.0f;
+
+////    //                            printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", prob_chosen, scale_prob, scale_zeros);
+
+////                        for (int z = 0; z<group_boxes[current_group].nelem; z++)
+////                        {
+//////                            min_box_idx = group_boxes[current_group].telem[0];
+//////                            current_item = z;
+//////                            break;
+
+////                            if(group_boxes[current_group].loss[z] > 2*FLT_EPSILON){
+////                                // (loss_elem/sum_loss*zero_scale + zero_prob) / (1+nelem*zero_prob - (1-zero_scale))
+////                                acc_prob += (((1.0f/group_boxes[current_group].loss[z])*scale_prob) * scale_zeros + zero_loss_prob)/(1 + group_boxes[current_group].nelem*zero_loss_prob - (1-scale_zeros));
+////                            }
+////                            else {
+////                                if (sum_loss < 2*FLT_EPSILON) { // Only 0 losses
+////                                    acc_prob += scale_prob;
+////                                }
+////                                else {
+////                                    acc_prob += zero_loss_prob/(1 + group_boxes[current_group].nelem*zero_loss_prob - (1-scale_zeros));
+////                                }
+////                            }
+
+////    //                                printf("PROB: %f LOSS: %f ID: %d\n", acc_prob, group_boxes[current_group].loss[z], group_boxes[current_group].telem[z]);
+
+////                            if(prob_chosen <= acc_prob) {
+////                                min_box_idx = group_boxes[current_group].telem[z];
+////                                current_item = z;
+////                                min_box_idx = group_boxes[current_group].telem[0];
+////                                current_item = 0;
+
+//////                                int sid = group_boxes[current_group].sample_id[z];
+////                                int sid = group_boxes[current_group].sample_id[0];
+////                                //                                    printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
+
+////                                if ((group_boxes[current_group].loss[current_item] < 0.25f) && (group_boxes[current_group].loss[current_item] > 0.001f)){
+//////                                if(1){
+
+////                                    int img_id = (*(int*)(&state.truth[min_box_idx * l.truth_size + b * l.truths + 5]))%1000000;
+////                                    int label_id = ((*(int*)(&state.truth[min_box_idx * l.truth_size + b * l.truths + 5]))/10000000);
+
+////                                    char* fname_init;
+////                                    fname_init = (char*)malloc(100*sizeof (char));
+////                                    sprintf(fname_init, "/home/fazevedo/Desktop/PhD/COCOPerson/labels/train/%012d_init.txt", img_id);
+////                                    printf("\n\n\nNAME OF INIT FILE %s %d\n", fname_init, label_id);
+
+////                                    if( access( fname_init, F_OK ) == 0 ) {
+////                                        FILE* finit = fopen(fname_init, "r");
+
+////                                        int i = 0;
+
+////                                        float x, y, h, w;
+////                                        int id = 0;
+
+////                                        while(fscanf(finit, "%d %f %f %f %f", &id, &x, &y, &w, &h) == 5) {
+////                                            if (i != sid*label_id){ // Verify if it is sample ID needed.
+////                                                i++;
+////                                                continue;
+////                                            }
+
+////                                            char* filename;
+////                                            filename = (char*)malloc(100*sizeof (char));
+////                                            sprintf(filename, "/home/fazevedo/Desktop/PhD/COCOPerson/labels/train/%012d_iteration.txt", img_id);
+////                                            printf("\n\n\nNAME OF ITERATION FILE %s\n", filename);
+
+////                                            float ax, ay, ah, aw;
+////                                            int aid;
+////                                            int found = 0;
+////                                            char* buffer;
+////                                            buffer = (char*)malloc(1*sizeof (char));
+////                                            int n_char = 0, line_size=42;
+
+////                                            if( access( filename, F_OK ) == 0 ) {
+////                                                FILE* fiter = fopen(filename, "r");
+
+////                                                while(fscanf(fiter, "%d %f %f %f %f", &aid, &ax, &ay, &aw, &ah) == 5) {
+////                                                    n_char+=line_size; // All line plus \n
+////                                                    buffer = realloc(buffer, n_char+1);
+
+////                                                    if ((aid == id) &&
+////                                                        (fabs(x-ax) < 2*FLT_EPSILON) &&
+////                                                        (fabs(y-ay) < 2*FLT_EPSILON) ){
+////                                                        found = 1;
+////                                                        // REPLACE LINE
+////                                                        sprintf(buffer+(n_char-line_size), "%d %.7f %.7f %.7f %.7f\n", id, x, y, w, h);
+////                                                    }
+////                                                    else {
+////                                                        sprintf(buffer+(n_char-line_size), "%d %.7f %.7f %.7f %.7f\n", aid, ax, ay, aw, ah);
+////                                                    }
+
+////                                                };
+////                                                fclose(fiter);
+
+////                                                if (found == 0){
+////                                                    // ADD Line
+////                                                    n_char+=line_size; // All line plus \n
+////                                                    buffer = realloc(buffer, n_char+1);
+////                                                    sprintf(buffer+(n_char-line_size), "%d %.7f %.7f %.7f %.7f\n", id, x, y, w, h);
+////            //                                        fprintf(fw, "%d %.7f %.7f %.7f %.7f\n", sid, sx, sy, sw, sh);
+////                                                }
+
+////                                                FILE* fw = fopen(filename, "w");
+////                                                buffer[n_char] = '\0';
+////                                                fprintf(fw, "%s", buffer);
+////                                                fclose(fw);
+////                                                free(buffer);
+////                                            } else {
+////                                                // file doesn't exist
+////                                                printf("FILE ITER DOES NOT EXIST\n");
+////                                                FILE* fw = fopen(filename, "w");
+////                                                fprintf(fw, "%d %.7f %.7f %.7f %.7f\n", id, x, y, w, h);
+////                                                fclose(fw);
+////                                            }
+
+////                                            free(filename);
+
+////                                            break;
+////                                        }
+////                                        fclose(finit);
+////                                    }
+////                                    else {
+////                                        printf("NO INIT FILE\n");
+////                                    }
+
+////                                    free(fname_init);
+////                                } //<<<< If Loss small
+////                                break;
+////                            }
+////                        }
+////                    }
+////                    else {
+//                        current_item = 0;
+//                        min_box_idx = group_boxes[current_group].telem[0];
+
+////                        printf("PID: %x\n", pid);
+//                        printf("(%x)[ISOLATED BOX: T: %d G: %d E: %d] %d %f\n", pid, num_boxes, current_group, 0, group_boxes[current_group].telem[0], group_boxes[current_group].loss[0]);
+
+//    //                    printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
+
+////                        box prediction = get_yolo_box(l.output, l.biases, best_n, box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.w * l.h, l.new_coords);
+
+////                        int img_id = (*(int*)(&state.truth[min_box_idx * l.truth_size + b * l.truths + 5]))%1000000;
+////                        int label_id = ((*(int*)(&state.truth[min_box_idx * l.truth_size + b * l.truths + 5]))/10000000);
+
+////                        char* fname_init;
+////                        fname_init = (char*)malloc(100*sizeof (char));
+////                        sprintf(fname_init, "/home/fazevedo/Desktop/PhD/COCOPerson/labels/train/%012d_init.txt", img_id);
+////                        printf("\n\n\n(%x)NAME OF INIT FILE %s %d\n", pid, fname_init, label_id);
+
+////                        char* fname_scale;
+////                        fname_scale = (char*)malloc(100*sizeof (char));
+////                        sprintf(fname_scale, "/home/fazevedo/Desktop/PhD/COCOPerson/labels/train/%012d_scale.txt", img_id);
+////                        printf("(%x)NAME OF SCALE FILE %s %d\n", pid, fname_scale, label_id);
+
+////                        if( access( fname_init, F_OK ) == 0 ) {
+////                            FILE* finit = fopen(fname_init, "r");
+
+////                            int i = 0;
+
+////                            float h, w;
+////                            int id = 0;
+
+////                            while(fscanf(finit, "%d %f %f %f %f", &id, &init_scales.x, &init_scales.y, &w, &h) == 5) {
+////                                if (i != label_id){ // Verify if it is sample ID needed.
+////                                    i++;
+////                                    continue;
+////                                }
+////                                break;
+////                            }
+////                            fclose(finit);
+
+////                            if( access( fname_scale, F_OK ) == 0 ) {
+////                                FILE* fscale = fopen(fname_scale, "r");
+
+////                                if(fscanf(fscale, "%f %f %f %f %d", &init_scales.dx, &init_scales.dy, &init_scales.sw, &init_scales.sh, &init_scales.flip) == 5) {
+////                                    printf("(%x)SCALES: %f %f %f %f %f %f %d\n", pid, init_scales.x, init_scales.y, init_scales.dx, init_scales.dy, init_scales.sw, init_scales.sh, init_scales.flip);
+
+////                                    float x_rec = (fabs(init_scales.flip - group_boxes[current_group].x) + init_scales.dx)/init_scales.sw;
+////                                    w = 0;
+////                                    w += 2*fabs(x_rec-init_scales.x);
+
+////                                    float y_rec = (group_boxes[current_group].y + init_scales.dy)/init_scales.sh;
+////                                    h = 0;
+////                                    h += 2*fabs(y_rec-init_scales.y);
+
+////                                    printf("(%x)RECOVER: %f %f %f %f\n", pid, x_rec, y_rec, w, h);
+////                                }
+
+////                                fclose(fscale);
+////                            }
+////                        }
+
+////                        free(fname_init);
+////                        free(fname_scale);
+
+
+////                    }
+
+////                    t = min_box_idx;
+//                    update_delta = 1;
+
+//                    //// VERIFY THIS!!!
+////                    current_group++; //To iterate next
+//                    continue;
+
+//                }
+//            }
+            }
+
+            if(update_delta)
+                printf("(%x)EVALUATING G: %d E: %d\n", pid, current_group, t);
 
 //            printf("NUMBER of GROUPS: %d\n", num_boxes);
 
             acc_loss = 0;
-//            if ((fabs(tx_ant-truth.x)>2*FLT_EPSILON) || (fabs(ty_ant-truth.y)>2*FLT_EPSILON))
-            if (0)
-            {
-
-                if ((min_box_idx > -1) && (t_ant < t)) // Only if comes from no repetition
-                {
-
-                    //////// vvvv PROBABILITY
-
-                    if (nelem_group > 1)
-                    {
-                        // Select min_box_idx based on 1/loss probability
-                        float sum_loss = 0.0f;
-                        float scale_zeros = 1.0f;
-                        int nelem_valid = 0;
-                        float zero_loss_prob = 0.1f;
-
-                        for (int z = 0; z<nelem_group; z++)
-                        {
-//                            printf("ORGANIZED LIST: %d %f\n", idx_group[z], loss_group[z]);
-                            if(loss_group[z] < 2*FLT_EPSILON) {
-                                scale_zeros -= zero_loss_prob; //Give a % for non-overlapping solutions
-                            }
-                            else {
-                                sum_loss += 1.0f/loss_group[z];
-                                nelem_valid++;
-                            }
-                        }
-
-                        float scale_prob = 1.0f/(nelem_group);
-
-                        if(sum_loss > 2*FLT_EPSILON) {
-                            scale_prob = (1.0/sum_loss);
-                        }
-
-                        float acc_prob = 0.0f;
-                        float prob_chosen = ((float)rand() / RAND_MAX * (1.0f - 0.0f)) + 0.0f;
-
-//                        printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", prob_chosen, scale_prob, scale_zeros);
-
-                        for (int z = 0; z<nelem_group; z++)
-                        {
-                            if(loss_group[z] > 2*FLT_EPSILON){
-                                acc_prob += (((1.0f/loss_group[z])*scale_prob) * scale_zeros + zero_loss_prob)/(1 + nelem_group*zero_loss_prob - (1-scale_zeros));
-                            }
-                            else {
-                                if (sum_loss < 2*FLT_EPSILON) {
-                                    acc_prob += scale_prob;
-                                }
-                                else {
-                                    acc_prob += zero_loss_prob/(1 + nelem_group*zero_loss_prob - (1-scale_zeros));
-                                }
-                            }
-
-//                            printf("PROB: %f SCALE: %f ZEROS_SC: %f\n", acc_prob);
-
-                            if(prob_chosen <= acc_prob) {
-                                min_box_idx = idx_group[z];
-//                                printf("PROB: %f ACC: %f IDX_CHOSEN: %d\n", prob_chosen, acc_prob, min_box_idx);
-                                break;
-                            }
-                        }
-                    }
-                    else {
-                        min_box_idx = idx_group[0];
-                    }
-
-                    //////// ^^^^ PROBABILITY
-
-                    t_ant = t;
-                    t = min_box_idx;
-                    update_delta = 1;
-
-//                    printf("CONTINUE SAME BB %d %d %d\n", cnt, t, t_ant);
-
-                    continue;
-                }
-//                {
-//                    used_boxes[count] = min_box_idx;
-//                    count++;
-//                    min_box_idx = -1;
-//                    used_boxes = (int*)xrealloc(used_boxes, (count) * sizeof(int));
-
-//                }
-
-//                if (skip_loss==1)
-//                {
-//                    skip_loss = 0;
-//                }
-                tx_ant = truth.x;
-                ty_ant = truth.y;
-//                args->tot_iou_loss += min_loss;
-                min_loss=FLT_MAX;
-                min_box_idx = t;
-                cnt = 1;
-
-
-                if (idx_group != NULL)
-                {
-//                    for (int z = 0; z<nelem_group-1; z++)
-//                        printf("ORGANIZED LIST: %d %f\n", idx_group[z], loss_group[z]);
-
-//                    if (nelem_group > 2)
-//                    {
-//                        // Select min_box_idx based on 1/loss probability
-//                        float sum_loss = 0.0f;
-//                        float scale_zeros = 1.0f;
-//                        for (int z = 0; z<nelem_group-1; z++)
-//                        {
-//                            printf("ORGANIZED LIST: %d %f\n", idx_group[z], loss_group[z]);
-//                            if(loss_group[z] < 2*FLT_EPSILON) {
-//                                scale_zeros -= 0.05f; //Give 5% for non-overlapping solutions
-//                            }
-//                            else {
-//                                sum_loss += loss_group[z];
-//                            }
-//                        }
-
-//                        float scale_prob = 1.0f/(nelem_group-1);
-
-//                        if(sum_loss > 2*FLT_EPSILON) {
-//                            scale_prob = 1/sum_loss;
-//                        }
-
-//                        float acc_prob = 0.0f;
-//                        float prob_chosen = ((float)rand() / RAND_MAX * (1.0f - 0.0f)) + 0.0f;
-
-//                        for (int z = 0; z<nelem_group-1; z++)
-//                        {
-//                            if(loss_group[z] > 2*FLT_EPSILON){
-//                                acc_prob += (1 - loss_group[z]*scale_prob) * scale_zeros;
-//                            }
-//                            else {
-//                                if (sum_loss < 2*FLT_EPSILON) {
-//                                    acc_prob += scale_prob;
-//                                }
-//                                else {
-//                                    acc_prob += 0.05;
-//                                }
-//                            }
-
-//                            if(prob_chosen <= acc_prob) {
-//                                min_box_idx = idx_group[z];
-//                                break;
-//                            }
-//                        }
-//                    }
-//                    else {
-//                        min_box_idx = idx_group[0];
-//                    }
-
-                    free(idx_group);
-                    free(loss_group);
-                }
-
-                nelem_group = 1;
-                n_valid = 0;
-
-            }
-//            else {
-//                nelem_group++;
-//                cnt++;
-////                printf("SAME BB %d %d %d\n", cnt, t, t_ant);
-//                skip_loss = 1;
-//            }
-            // ^^^ COMMENTED
 
             int mask_n = int_index(l.mask, best_n, l.n);
-            if (mask_n >= 0) {
+
+//            int s_id = (int)(*(int*)(&state.truth[t * l.truth_size + b * l.truths + 5])/1000000)%10;
+
+            if ((s_id == 1) || (s_id == 3)) {
+                float best_conf_value = 0.0f;
+                for (int z=0; z<l.total; z++) {
+                    int test_mask = int_index(l.mask, z, l.n);
+                    if (test_mask > -1) {
+                        float conf = l.output[entry_index(l, b, test_mask * l.w * l.h + j * l.w + i, 4)];
+                        if (conf > best_conf_value) {
+                            best_conf_value = conf;
+                            best_n = z;
+                            printf("(%x)BEST CONF: %f %d\n", pid, best_conf_value, z);
+                        }
+                    }
+                }
+                if (best_conf_value < 0.1f) {
+                    mask_n = -1;
+                } else {
+                    mask_n = int_index(l.mask, best_n, l.n);
+                }
+            }
+
+//            for (int z=0; z<l.total; z++) {
+//                printf("(%x)CONF %d %d: %f\n", pid, z, int_index(l.mask, z, l.n), l.output[entry_index(l, b, z * l.w * l.h + j * l.w + i, 4)]);
+//            }
+
+
+
+//            printf("MASK: %d\n", l.mask[0]);
+//            printf("IJ: %d %d\n", i,j);
+            if (mask_n >= 0) { // Check if anchor is from the output evaluated (0-2 first, 3-5 medium, 6-8 last)
                 int class_id = state.truth[t * l.truth_size + b * l.truths + 4];
                 if (l.map) class_id = l.map[class_id];
 
                 int box_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 0);
-                const float class_multiplier = (l.classes_multipliers) ? l.classes_multipliers[class_id] : 1.0f;
-                ious all_ious = delta_yolo_box(update_delta, truth, l.output, l.biases, best_n, box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
+                int conf_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 4);
 
-//                acc_loss += all_ious.ciou;
-                acc_loss += 1 - all_ious.iou;
-                if (update_delta)
-                {
+//                if (l.output[conf_index] > 0.25f) {
+                if (1) {
+    //                avg_obj += l.output[obj_index];
+//                    printf("BOX PRED IDX: %d %f\n", box_index, l.output[conf_index]);
+                    const float class_multiplier = (l.classes_multipliers) ? l.classes_multipliers[class_id] : 1.0f;
+                    ious all_ious = delta_yolo_box((int)(state.truth[t * l.truth_size + b * l.truths + 5]), group_boxes[current_group].nelem, update_delta, truth, l.output, l.biases, best_n, box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
+//                    ious all_ious = delta_yolo_box(update_delta*(group_boxes[current_group].nelem==1), truth, l.output, l.biases, best_n, box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
 
-                    (*state.net.total_bbox)++;
+    //                acc_loss += all_ious.ciou;
+                    acc_loss += 1 - all_ious.iou;
+//                    acc_loss += 1 - l.output[conf_index];
+//                    printf("ACC LOSS: %f \n", acc_loss);
+//                    if (update_delta && (l.output[conf_index] < 1.01f - 0.96f*(group_boxes[current_group].nelem>1)))
+//                    const int track_id = *(int*)(&state.truth[t * l.truth_size + b * l.truths + 5]);
+                    const int track_id = (int)(state.truth[t * l.truth_size + b * l.truths + 5]);
+                    printf("(%x)IMG: %d LABEL: %f %f %f %f\n", pid, track_id, truth.x, truth.y, truth.w, truth.h);
+                    if (update_delta)// && (group_boxes[current_group].nelem==1))
+                    {
 
-                    const int truth_in_index = t * l.truth_size + b * l.truths + 5;
-                    const int track_id = state.truth[truth_in_index];
-                    const int truth_out_index = b * l.n * l.w * l.h + mask_n * l.w * l.h + j * l.w + i;
-                    l.labels[truth_out_index] = track_id;
-                    l.class_ids[truth_out_index] = class_id;
-                    //printf(" track_id = %d, t = %d, b = %d, truth_in_index = %d, truth_out_index = %d \n", track_id, t, b, truth_in_index, truth_out_index);
+                        (*state.net.total_bbox)++;
 
-                    // range is 0 <= 1
-                    args->tot_iou += all_ious.iou;
-                    args->tot_iou_loss += 1 - all_ious.iou;
-//                    args->tot_iou_loss += all_ious.ciou;
+                        const int truth_in_index = t * l.truth_size + b * l.truths + 5;
+//                        const int track_id = state.truth[truth_in_index];
+                        const int truth_out_index = b * l.n * l.w * l.h + mask_n * l.w * l.h + j * l.w + i;
+                        l.labels[truth_out_index] = track_id;
+                        l.class_ids[truth_out_index] = class_id;
 
-//    //                acc_loss += all_ious.ciou;
-//    //                if (update_delta)
-//    //                {
-//                        if (FLT_MAX - args->tot_iou_loss > all_ious.ciou)
-//                            args->tot_iou_loss += all_ious.ciou;
-//                        else
-//                            args->tot_iou_loss = FLT_MAX;
-//    //                }
+//                        printf("IMG: %d LABEL: %f %f %f %f\n", track_id, truth.x, truth.y, truth.w, truth.h);
 
-                    // range is -1 <= giou <= 1
-                    tot_giou += all_ious.giou;
-                    args->tot_giou_loss += 1 - all_ious.giou;
+                        //printf(" track_id = %d, t = %d, b = %d, truth_in_index = %d, truth_out_index = %d \n", track_id, t, b, truth_in_index, truth_out_index);
 
-                    tot_diou += all_ious.diou;
-                    tot_diou_loss += 1 - all_ious.diou;
+                        // range is 0 <= 1
+                        args->tot_iou += all_ious.iou;//*(group_boxes[current_group].nelem==1);
+//                        args->tot_iou_loss += 1 - all_ious.iou;
 
-                    tot_ciou += all_ious.ciou;
-                    tot_ciou_loss += 1 - all_ious.ciou;
+                        printf("GROUP ELEMS: %d %d\n", current_group, group_boxes[current_group].nelem);
+                        args->tot_iou_loss += (1 - all_ious.iou)/group_boxes[current_group].nelem;//*(group_boxes[current_group].nelem==1);
 
-                    int obj_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 4);
-                    avg_obj += l.output[obj_index];
-                    if (l.objectness_smooth) {
-                        float delta_obj = class_multiplier * l.obj_normalizer * (1 - l.output[obj_index]);
-                        if (l.delta[obj_index] == 0) l.delta[obj_index] = delta_obj;
+//                        args->tot_iou_loss += 1 - l.output[conf_index];
+//                        args->tot_iou_loss += all_ious.ciou;
+
+    //    //                acc_loss += all_ious.ciou;
+    //    //                if (update_delta)
+    //    //                {
+    //                        if (FLT_MAX - args->tot_iou_loss > all_ious.ciou)
+    //                            args->tot_iou_loss += all_ious.ciou;
+    //                        else
+    //                            args->tot_iou_loss = FLT_MAX;
+    //    //                }
+
+                        // range is -1 <= giou <= 1
+                        tot_giou += all_ious.giou;
+                        args->tot_giou_loss += 1 - all_ious.giou;
+
+                        tot_diou += all_ious.diou;
+                        tot_diou_loss += 1 - all_ious.diou;
+
+                        tot_ciou += all_ious.ciou;
+                        tot_ciou_loss += 1 - all_ious.ciou;
+
+                        int obj_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 4);
+                        avg_obj += l.output[obj_index];
+                        if (l.objectness_smooth) {
+                            float delta_obj = class_multiplier * l.obj_normalizer * (1 - l.output[obj_index]);
+                            if (l.delta[obj_index] == 0) l.delta[obj_index] = delta_obj;
+                        }
+                        else l.delta[obj_index] = class_multiplier * l.obj_normalizer * (1 - l.output[obj_index]);
+
+                        int class_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 4 + 1);
+                        delta_yolo_class(l.output, l.delta, class_index, class_id, l.classes, l.w * l.h, &avg_cat, l.focal_loss, l.label_smooth_eps, l.classes_multipliers, l.cls_normalizer);
+
+                        //printf(" label: class_id = %d, truth.x = %f, truth.y = %f, truth.w = %f, truth.h = %f \n", class_id, truth.x, truth.y, truth.w, truth.h);
+                        //printf(" mask_n = %d, l.output[obj_index] = %f, l.output[class_index + class_id] = %f \n\n", mask_n, l.output[obj_index], l.output[class_index + class_id]);
+
+                        ++(args->count);
+                        ++(args->class_count);
+                        if (all_ious.iou > .5) recall += 1;
+                        if (all_ious.iou > .75) recall75 += 1;
                     }
-                    else l.delta[obj_index] = class_multiplier * l.obj_normalizer * (1 - l.output[obj_index]);
-
-                    int class_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 4 + 1);
-                    delta_yolo_class(l.output, l.delta, class_index, class_id, l.classes, l.w * l.h, &avg_cat, l.focal_loss, l.label_smooth_eps, l.classes_multipliers, l.cls_normalizer);
-
-                    //printf(" label: class_id = %d, truth.x = %f, truth.y = %f, truth.w = %f, truth.h = %f \n", class_id, truth.x, truth.y, truth.w, truth.h);
-                    //printf(" mask_n = %d, l.output[obj_index] = %f, l.output[class_index + class_id] = %f \n\n", mask_n, l.output[obj_index], l.output[class_index + class_id]);
-
-                    ++(args->count);
-                    ++(args->class_count);
-                    if (all_ious.iou > .5) recall += 1;
-                    if (all_ious.iou > .75) recall75 += 1;
                 }
             }
 
@@ -1239,18 +1966,29 @@ void *process_batch(void* ptr)
 
                         int box_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 0);
                         box_idx = box_index;
+                        int cf_index = entry_index(l, b, mask_n * l.w * l.h + j * l.w + i, 4);
                         const float class_multiplier = (l.classes_multipliers) ? l.classes_multipliers[class_id] : 1.0f;
-                        ious all_ious = delta_yolo_box(update_delta, truth, l.output, l.biases, n, box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
+                        ious all_ious = delta_yolo_box((int)(state.truth[t * l.truth_size + b * l.truths + 5]), group_boxes[current_group].nelem, update_delta, truth, l.output, l.biases, n, box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
+
+                        //                        ious all_ious = delta_yolo_box(*(int*)(&state.truth[t * l.truth_size + b * l.truths + 5]), group_boxes[current_group].nelem, update_delta, truth, l.output, l.biases, n, box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
+//                        ious all_ious = delta_yolo_box(update_delta*(group_boxes[current_group].nelem==1), truth, l.output, l.biases, n, box_index, i, j, l.w, l.h, state.net.w, state.net.h, l.delta, (2 - truth.w * truth.h), l.w * l.h, l.iou_normalizer * class_multiplier, l.iou_loss, 1, l.max_delta, state.net.rewritten_bbox, l.new_coords);
 
 //                        acc_loss += all_ious.ciou;
                         acc_loss += 1 - all_ious.iou;
-                        if(update_delta)
+//                        acc_loss += 1 - l.output[cf_index];
+                        if(update_delta)// && (group_boxes[current_group].nelem==1))
+//                        if (update_delta && (l.output[cf_index] > 0.05f*(group_boxes[current_group].nelem>1)))
                         {
                             (*state.net.total_bbox)++;
 
                             // range is 0 <= 1
-                            args->tot_iou += all_ious.iou;
-                            args->tot_iou_loss += 1 - all_ious.iou;
+                            args->tot_iou += all_ious.iou;//*(group_boxes[current_group].nelem==1);
+//                            args->tot_iou_loss += 1 - all_ious.iou;
+                            printf("GROUP ELEMS: %d %d\n", current_group, group_boxes[current_group].nelem);
+                            args->tot_iou_loss += (1 - all_ious.iou)/group_boxes[current_group].nelem;//*(group_boxes[current_group].nelem==1);
+
+
+//                            args->tot_iou_loss += 1 - l.output[cf_index];
 //                            args->tot_iou_loss += all_ious.ciou;
 
 //    //                        acc_loss += all_ious.ciou;
@@ -1296,6 +2034,7 @@ void *process_batch(void* ptr)
             if(update_delta == 1)
             {
                 update_delta = 0;
+                current_group++;
 
             }
             else{
@@ -1309,7 +2048,9 @@ void *process_batch(void* ptr)
 //                min_box_idx = *(idx_group); //Get always best value
 
                 group_boxes[current_group].loss[current_item] = acc_loss;
+//                printf("ACC LOSS: %f\n", acc_loss);
 
+                // ORGANIZE LOSSES
                 if (group_boxes[current_group].nelem > 1)
                 {
                     for (int a = 0; a < group_boxes[current_group].nelem-1; a++) {
@@ -1324,36 +2065,27 @@ void *process_batch(void* ptr)
                                 group_boxes[current_group].telem[a] = group_boxes[current_group].telem[b];
                                 group_boxes[current_group].telem[b] = aux_t;
 
+                                int aux_s = group_boxes[current_group].sample_id[a];
+                                group_boxes[current_group].sample_id[a] = group_boxes[current_group].sample_id[b];
+                                group_boxes[current_group].sample_id[b] = aux_s;
+
                             }
                         }
                     }
                 }
 
-                //// COLOCAR Organizado por Loss
-
             }
 
-//            if ((min_loss > acc_loss) && (acc_loss > 2*FLT_EPSILON)){
-//                min_loss = acc_loss;
-//                min_box_idx = t;
-//            }
 
-//            if(t_ant > t){
-//                t = t_ant;
-////                free(loss_group);
-////                free(idx_group);
-////                nelem_group = 1;
-//            } else {
+            t++;
+
+//            if(all_evaluated==0){
 //                t++;
 //            }
-
-            if(all_evaluated==0){
-                t++;
-            }
-//            if(final==1)
+////            if(final==1)
+////                break;
+//            if((all_evaluated==1) && (current_group==num_boxes))
 //                break;
-            if((all_evaluated==1) && (current_group==num_boxes))
-                break;
         }
 
 //        args->tot_iou_loss += min_loss;
@@ -1385,9 +2117,12 @@ void *process_batch(void* ptr)
             group_boxes[i].nelem = 0;
             free(group_boxes[i].loss);
             free(group_boxes[i].telem);
+            free(group_boxes[i].sample_id);
         }
         free(group_boxes);
         num_boxes = 0;
+
+        free(objects);
 
     }
 
@@ -1639,6 +2374,7 @@ void forward_yolo_layer(const layer l, network_state state)
 
         // gIOU loss + MSE (objectness) loss
         if (l.iou_loss == MSE) {
+//        if (0) {
             *(l.cost) = pow(mag_array(l.delta, l.outputs * l.batch), 2);
 
 //            ///////ADDED
@@ -1668,8 +2404,8 @@ void forward_yolo_layer(const layer l, network_state state)
         classification_loss /= l.batch;
         iou_loss /= l.batch;
 
-//        fprintf(stderr, "v3 (%s loss, Normalizer: (iou: %.2f, obj: %.2f, cls: %.2f) Region %d Avg (IOU: %f), count: %d, class_loss = %f, iou_loss = %f, total_loss = %f \n",
-//            (l.iou_loss == MSE ? "mse" : (l.iou_loss == GIOU ? "giou" : "iou")), l.iou_normalizer, l.obj_normalizer, l.cls_normalizer, state.index, tot_iou / count, count, classification_loss, iou_loss, loss);
+        fprintf(stderr, "v3 (%s loss, Normalizer: (iou: %.2f, obj: %.2f, cls: %.2f) Region %d Avg (IOU: %f), count: %d, class_loss = %f, iou_loss = %f, total_loss = %f \n",
+            (l.iou_loss == MSE ? "mse" : (l.iou_loss == GIOU ? "giou" : "iou")), l.iou_normalizer, l.obj_normalizer, l.cls_normalizer, state.index, tot_iou / count, count, classification_loss, iou_loss, loss);
 
         //fprintf(stderr, "v3 (%s loss, Normalizer: (iou: %.2f, cls: %.2f) Region %d Avg (IOU: %f, GIOU: %f), Class: %f, Obj: %f, No Obj: %f, .5R: %f, .75R: %f, count: %d, class_loss = %f, iou_loss = %f, total_loss = %f \n",
         //    (l.iou_loss == MSE ? "mse" : (l.iou_loss == GIOU ? "giou" : "iou")), l.iou_normalizer, l.obj_normalizer, state.index, tot_iou / count, tot_giou / count, avg_cat / class_count, avg_obj / count, avg_anyobj / (l.w*l.h*l.n*l.batch), recall / count, recall75 / count, count,

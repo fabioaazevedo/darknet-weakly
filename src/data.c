@@ -198,6 +198,446 @@ box_label *read_boxes(char *filename, int *n)
 {
     box_label* boxes = (box_label*)xcalloc(1, sizeof(box_label));
     FILE *file = fopen(filename, "r");
+    printf("FILENAME: %s %d\n", filename, strlen(filename));
+    char *filename2 = (char*)malloc(strlen(filename)+1+7);
+
+    memcpy(filename2, filename, strlen(filename)-4);
+    char aux[12] = "_backup.txt\0";
+    memcpy(filename2 + strlen(filename)-4, aux, 12);
+
+//    printf("FILENAME2: %s %d\n", filename2, strlen(filename2));
+
+    char *path = (char*)malloc(strlen(filename));
+    memcpy(path, filename, strlen(filename));
+    char *ssc;
+    int l = 0;
+    ssc = strstr(path, "/");
+    do{
+        l = strlen(ssc) + 1;
+        path = &path[strlen(path)-l+2];
+        ssc = strstr(path, "/");
+    }while(ssc);
+
+//    char *img_name = (char*)malloc(strlen(path)-4);
+//    memcpy(img_name, path, strlen(path)-4);
+//    img_name[strlen(path)-4] = '\0';
+    int img_number = (int)strtol(path+10*sizeof(char), &path, 10);
+    printf("PATH: %s %d\n", path, img_number);
+
+
+    char *filename3 = (char*)malloc(strlen(filename)+1+5);
+
+    memcpy(filename3, filename, strlen(filename)-4);
+    char aux2[10] = "_init.txt\0";
+    memcpy(filename3 + strlen(filename)-4, aux2, 10);
+
+    char *filename4 = (char*)malloc(strlen(filename)+1+10);
+
+    memcpy(filename4, filename, strlen(filename)-4);
+    memcpy(filename4 + strlen(filename)-4, "_iteration.txt\0", 15);
+
+//    int crosswalk = 1;
+//    char* fname_pred;
+//    fname_pred = (char*)malloc(100*sizeof (char));
+//    if(crosswalk==1) {
+//        sprintf(fname_pred, "/home/fazevedo/Documents/yolo-mark/img/0313322333%09dcomb.txt", img_number);
+//    } else {
+//        sprintf(fname_pred, "/home/fazevedo/Desktop/PhD/COCOPerson/labels/train/%012d_pred.txt", img_number);
+//    }
+
+
+
+    char *fname_noext = (char*)malloc(strlen(filename)-4+1);
+    memcpy(fname_noext, filename, strlen(filename)-4);
+    fname_noext[strlen(filename)-4] = '\0';
+
+    char* fname_pred;
+    fname_pred = (char*)malloc(100*sizeof (char));
+    sprintf(fname_pred, "%s_pred.txt", fname_noext);
+//    if(crosswalk==1) {
+//        sprintf(fname_pred, "/home/fazevedo/Documents/yolo-mark/img/0313322333%09dcomb.txt", img_number);
+//    } else {
+//        sprintf(fname_pred, "/home/fazevedo/Desktop/PhD/COCOPerson/labels/train/%012d_pred.txt", img_number);
+//    }
+
+
+    typedef struct hip {
+        float loss;
+        float x;
+        float y;
+        float w;
+        float h;
+    } hip_t;
+
+
+    if (!file) {
+        printf("Can't open label file. (This can be normal only if you use MSCOCO): %s \n", filename);
+        //file_error(filename);
+        FILE* fw = fopen("bad.list", "a");
+        fwrite(filename, sizeof(char), strlen(filename), fw);
+        char *new_line = "\n";
+        fwrite(new_line, sizeof(char), strlen(new_line), fw);
+        fclose(fw);
+        if (check_mistakes) {
+            printf("\n Error in read_boxes() \n");
+            getchar();
+        }
+
+        *n = 0;
+        return boxes;
+    }
+    const int max_obj_img = 4000;// 30000;
+    const int img_hash = (custom_hash(filename) % max_obj_img)*max_obj_img;
+    printf(" c_hash = %d, img_hash = %d, filename = %s; ", custom_hash(filename), img_hash, filename);
+    float x, y, h, w;
+    int id;
+    int count = 0;
+
+    float x2, y2, h2, w2;
+    int id2;
+
+    int label_id = 0;
+
+    int iter = 0;
+
+
+//    FILE* fcurrent = fopen("hash/current_batch.txt", "a");
+    pid_t pid = syscall(__NR_gettid);
+
+    char* fname_current;
+    fname_current = (char*)malloc(100*sizeof (char));
+
+
+    while(fscanf(file, "%d %f %f %f %f", &id, &x, &y, &w, &h) == 5){
+
+        int only_label = 0;
+
+        if((h < 0.001) && (w < 0.001))// && (x > 0.001) && (y > 0.001))
+        {
+            if((x < 0.001) || (y < 0.001)) {
+                only_label = 1;
+                x = 0.5;
+                y = 0.5;
+            }
+
+            FILE *file2 = fopen(filename2, "r");
+            FILE *finit = fopen(filename3, iter==0 ? "w":"a");
+
+            iter++;
+
+            // FOR GT
+//            do{
+//                fscanf(file2, "%d %f %f %f %f", &id2, &x2, &y2, &w2, &h2);
+//            } while((fabs(x2-x) > 2*FLT_EPSILON) || (fabs(y-y2) > 2*FLT_EPSILON));
+
+
+            int found = 0;
+            float href, wref;
+
+            //             if( access( filename4, F_OK ) == 0 ) {
+            //                 FILE *fit = fopen(filename4, "r");
+            //                 float x3, y3, h3, w3;
+            //                 int id3;
+
+            //                 while(fscanf(fit, "%d %f %f %f %f", &id3, &x3, &y3, &w3, &h3) == 5) {
+            //                     if ((id3 == id) &&
+            //                         (fabs(x-x3) < 2*FLT_EPSILON) &&
+            //                         (fabs(y-y3) < 2*FLT_EPSILON) ){
+            //                         found = 1;
+            //                         wref = w3;
+            //                         href = h3;
+            //                         break;
+            //                     }
+            //                 }
+            //                 fclose(fit);
+            //             }
+
+            if( access( fname_pred, F_OK ) == 0 ) {
+                float ax, ay, ah, aw, aiou, aconf;
+                int aid, cnt, alid;
+
+                int n_hip = 0;
+                int valid = 0;
+                float sum_prob = 0.0f;
+                hip_t* hip = (hip_t*)xcalloc(1, sizeof(hip_t));
+
+                FILE *fpred = fopen(fname_pred, "r");
+
+                while(fscanf(fpred, "%d %d %f %f %f %f %f %f %d\n", &aid, &alid, &ax, &ay, &aw, &ah, &aiou, &aconf, &cnt) == 9) {
+                    if(alid == label_id) {
+
+                        hip = (hip_t*)xrealloc(hip, (n_hip+1)*sizeof(hip_t));
+
+                        hip[n_hip].loss = cnt + aconf + (aiou); // ".loss" corresponds to confidence here
+                        hip[n_hip].x = ax;
+                        hip[n_hip].y = ay;
+                        hip[n_hip].w = aw;
+                        hip[n_hip].h = ah;
+                        sum_prob += hip[n_hip].loss;
+
+                        n_hip++;
+
+                        if((cnt > 1) || (n_hip > 1)){
+                            found = 1;
+                        }
+                    }
+                }
+                fclose(fpred);
+
+                float rchoice = rand_uniform(0.0,1.0)*sum_prob;
+                float acc_loss = 0.0f;
+                for (int z=0; z<n_hip; z++) {
+                    acc_loss += hip[z].loss;
+                    if(acc_loss > rchoice) {
+                        wref = hip[z].w;
+                        href = hip[z].h;
+                        x = hip[z].x;
+                        y = hip[z].y;
+                        break;
+                    }
+                }
+                free(hip);
+            }
+
+            float most_iou = 0.0f;
+            float h_final, w_final;
+
+            if (only_label) {
+                found *= rand_uniform(0.0,1.0) < 0.8f; // 20% prob of generating type 3
+            }
+
+            // USED FOR LINE Bypass values
+            //             h = h2;
+            //             w = w2;
+
+            //             printf("TRUE %f %f %f %f\n", x2,y2,w2,h2);
+
+            //            for (int k = 0; k < 3; k++){
+            for (int k = 0; k < 1; k++){
+                //                if (found && (k==0))
+                //                {
+                //                    h = href;
+                //                    w = wref;
+                //                }
+
+                //                if (found && (k>0) && (k<=2))
+                //                {
+                //                    w = wref*rand_uniform(0.9,1.1);
+                //                    h = href*rand_uniform(0.9,1.1);
+
+                //                    w = fminf(w, fminf(2*x, 2*(1-x)));
+                //                    h = fminf(h, fminf(2*y, 2*(1-y)));
+                //                }
+
+                boxes = (box_label*)xrealloc(boxes, (count + 1) * sizeof(box_label));
+                //                boxes[count].track_id = count + img_hash;
+//                boxes[count].track_id = img_number; //k*1000000 + label_id*10000000 + img_number;
+//                boxes[count].sample_id = (uint8_t)k+1+found; // Identify point labels // "found" indicates sample from previous prediction
+//                boxes[count].label_id = (uint8_t)label_id;
+                boxes[count].sample_id = 0; // Identify point labels // "found" indicates sample from previous prediction
+                boxes[count].label_id  = 0;
+                //printf(" boxes[count].track_id = %d, count = %d \n", boxes[count].track_id, count);
+                boxes[count].id = id;
+                boxes[count].x = x;
+                boxes[count].y = y;
+                boxes[count].track_id = img_hash+count;
+
+//                found = -1;
+
+                while(1) {
+                    sprintf(fname_current, "hash/%d.txt", boxes[count].track_id);
+    //                if( access( fname_current, F_OK ) != 0 ) {
+    //                 if( 1) {
+                    if( access( fname_current, F_OK ) != 0 ) {
+                        FILE* fcurrent = fopen(fname_current, "w");
+                        fprintf(fcurrent, "%d %d %s\n", k+1+found + 2*only_label, label_id, fname_noext);
+                        fclose(fcurrent);
+                        break;
+                    } else {
+                        FILE* fcurrent = fopen(fname_current, "r");
+                        int a,b;
+                        char* fname_aux;
+                        fname_aux = (char*)malloc(100*sizeof (char));
+                        fscanf(fcurrent, "%d %d %s\n", &a, &b,  fname_aux);
+                        fclose(fcurrent);
+
+                        if((strcmp(fname_noext, fname_aux) != 0) || (b != label_id)) {// Same hash to other filename or other label
+                            boxes[count].track_id++;
+                            printf("ADJUSTING TRACKID POINT\n");
+                        } else {
+                            free(fname_aux);
+
+                            if((a != 0)) {
+                                FILE* fcurrent = fopen(fname_current, "w");
+                                fprintf(fcurrent, "%d %d %s\n", k+1+found + 2*only_label, label_id, fname_noext);
+                                fclose(fcurrent);
+                            }
+
+                            break;
+                        }
+                        free(fname_aux);
+                    }
+                }
+
+
+                if (found == 0) {
+                    w = 2*fminf(x, 1-x);
+                    h = 2*fminf(y, 1-y);
+
+                    w=0.05f;
+                    h=0.05f;
+                } else {
+                    w = wref;
+                    h = href;
+                }
+
+//                boxes[count].sample_id = 0;
+//                w = w2;
+//                h = h2;
+
+                boxes[count].h = h;
+                boxes[count].w = w;
+                boxes[count].left   = x - w/2;
+                boxes[count].right  = x + w/2;
+                boxes[count].top    = y - h/2;
+                boxes[count].bottom = y + h/2;
+                ++count;
+
+                fprintf(finit, "%d %.7f %.7f %.7f %.7f\n", id, x, y, w, h);
+
+            }
+
+            fclose(file2);
+            fclose(finit);
+
+        }
+        else {
+            //            printf("FULLY ANNO %s\n", filename);
+            boxes = (box_label*)xrealloc(boxes, (count + 1) * sizeof(box_label));
+            //            boxes[count].track_id = count + img_hash;
+//            boxes[count].track_id = img_number;//label_id*10000000 + img_number;
+            boxes[count].track_id = img_hash+count;
+            boxes[count].sample_id = 0;
+            boxes[count].label_id  = 0;
+//            boxes[count].label_id = (uint8_t)label_id;
+            //printf(" boxes[count].track_id = %d, count = %d \n", boxes[count].track_id, count);
+            boxes[count].id = id;
+            boxes[count].x = x;
+            boxes[count].y = y;
+
+            boxes[count].h = h;
+            boxes[count].w = w;
+            boxes[count].left   = x - w/2;
+            boxes[count].right  = x + w/2;
+            boxes[count].top    = y - h/2;
+            boxes[count].bottom = y + h/2;
+
+//            sprintf(fname_current, "hash/%d.txt", boxes[count].track_id);
+////            if( access( fname_current, F_OK ) != 0 ) {
+//            if(1){
+//                FILE* fcurrent = fopen(fname_current, "w");
+//                fprintf(fcurrent, "%d %d %s\n", 0, label_id, fname_noext);
+//                fclose(fcurrent);
+//            }
+////            fprintf(fcurrent, "(%x) %d %d %d %s\n", pid, boxes[count].track_id, 0, label_id, fname_noext);
+
+            while(1) {
+                sprintf(fname_current, "hash/%d.txt", boxes[count].track_id);
+//                if( access( fname_current, F_OK ) != 0 ) {
+//                 if( 1) {
+                if( access( fname_current, F_OK ) != 0 ) {
+                    FILE* fcurrent = fopen(fname_current, "w");
+                    fprintf(fcurrent, "%d %d %s\n", 0, label_id, fname_noext);
+                    fclose(fcurrent);
+                    break;
+                } else {
+                    FILE* fcurrent = fopen(fname_current, "r");
+                    int a,b;
+                    char* fname_aux;
+                    fname_aux = (char*)malloc(100*sizeof (char));
+                    fscanf(fcurrent, "%d %d %s\n", &a, &b,  fname_aux);
+                    fclose(fcurrent);
+
+                    if((strcmp(fname_noext, fname_aux) != 0)  || (b != label_id)) {// Same hash to other filename
+                        boxes[count].track_id++;
+                        printf("ADJUSTING TRACKID\n");
+                    } else {
+                        free(fname_aux);
+
+                        if((a != 0) || (b != label_id)) {
+                            FILE* fcurrent = fopen(fname_current, "w");
+                            fprintf(fcurrent, "%d %d %s\n", 0, label_id, fname_noext);
+                            fclose(fcurrent);
+                        }
+                        break;
+                    }
+                    free(fname_aux);
+                }
+            }
+
+            ++count;
+        }
+
+        label_id++;
+
+    }
+    fclose(file);
+    *n = count;
+    free(filename2);
+    free(filename3);
+    free(filename4);
+    free(fname_pred);
+
+    free(fname_noext);
+    free(fname_current);
+//    free(img_name);
+//    free(path);
+    return boxes;
+}
+
+box_label *read_boxes2(char *filename, int *n)
+{
+    box_label* boxes = (box_label*)xcalloc(1, sizeof(box_label));
+    FILE *file = fopen(filename, "r");
+    printf("FILENAME: %s %d\n", filename, strlen(filename));
+    char *filename2 = (char*)malloc(strlen(filename)+1+7);
+
+    memcpy(filename2, filename, strlen(filename)-4);
+    char aux[12] = "_backup.txt\0";
+    memcpy(filename2 + strlen(filename)-4, aux, 12);
+
+//    printf("FILENAME2: %s %d\n", filename2, strlen(filename2));
+
+    char *path = (char*)malloc(strlen(filename));
+    memcpy(path, filename, strlen(filename));
+    char *ssc;
+    int l = 0;
+    ssc = strstr(path, "/");
+    do{
+        l = strlen(ssc) + 1;
+        path = &path[strlen(path)-l+2];
+        ssc = strstr(path, "/");
+    }while(ssc);
+
+//    char *img_name = (char*)malloc(strlen(path)-4);
+//    memcpy(img_name, path, strlen(path)-4);
+//    img_name[strlen(path)-4] = '\0';
+    int img_number = (int)strtol(path, &path, 10);
+    printf("PATH: %s %d\n", path, img_number);
+
+
+    char *filename3 = (char*)malloc(strlen(filename)+1+5);
+
+    memcpy(filename3, filename, strlen(filename)-4);
+    char aux2[10] = "_init.txt\0";
+    memcpy(filename3 + strlen(filename)-4, aux2, 10);
+
+    char *filename4 = (char*)malloc(strlen(filename)+1+10);
+
+    memcpy(filename4, filename, strlen(filename)-4);
+    memcpy(filename4 + strlen(filename)-4, "_iteration.txt\0", 15);
+
+
     if (!file) {
         printf("Can't open label file. (This can be normal only if you use MSCOCO): %s \n", filename);
         //file_error(filename);
@@ -220,12 +660,74 @@ box_label *read_boxes(char *filename, int *n)
     float x, y, h, w;
     int id;
     int count = 0;
+
+    float x2, y2, h2, w2;
+    int id2;
+
+    int label_id = 0;
+
+    int iter = 0;
+
     while(fscanf(file, "%d %f %f %f %f", &id, &x, &y, &w, &h) == 5){
 
-        if((h < 0.001) && (w < 0.001) && (x > 0.001) && (y > 0.001))
+        if((h < 0.001) && (x > 0.001) && (y > 0.001)) //&& (w < 0.001) && (x > 0.001) && (y > 0.001))
         {
+             FILE *file2 = fopen(filename2, "r");
+             FILE *finit = fopen(filename3, iter==0 ? "w":"a");
+
+             iter++;
+
+             do{
+                fscanf(file2, "%d %f %f %f %f", &id2, &x2, &y2, &w2, &h2);
+             } while((fabs(x2-x) > 2*FLT_EPSILON) || (fabs(y-y2) > 2*FLT_EPSILON));
+
+
+             int found = 0;
+             float href, wref;
+
+             if( access( filename4, F_OK ) == 0 ) {
+                 FILE *fit = fopen(filename4, "r");
+                 float x3, y3, h3, w3;
+                 int id3;
+
+                 while(fscanf(fit, "%d %f %f %f %f", &id3, &x3, &y3, &w3, &h3) == 5) {
+                     if ((id3 == id) &&
+                         (fabs(x-x3) < 2*FLT_EPSILON) &&
+                         (fabs(y-y3) < 2*FLT_EPSILON) ){
+                         found = 1;
+                         wref = w3;
+                         href = h3;
+                         break;
+                     }
+                 }
+                 fclose(fit);
+             }
+
+             float most_iou = 0.0f;
+             float h_final, w_final;
+
+// USED FOR LINE Bypass values
+//             h = h2;
+//             w = w2;
+
+//             printf("TRUE %f %f %f %f\n", x2,y2,w2,h2);
+
 //            for (int k = 0; k < 3; k++){
             for (int k = 0; k < 5; k++){
+                if (found && (k==0))
+                {
+                    h = href;
+                    w = wref;
+                }
+
+                if (found && (k>0) && (k<=2))
+                {
+                    w = wref*rand_uniform(0.9,1.1);
+                    h = href*rand_uniform(0.9,1.1);
+
+                    w = fminf(w, fminf(2*x, 2*(1-x)));
+                    h = fminf(h, fminf(2*y, 2*(1-y)));
+                }
 
                 // CROSSWALK
 //                float w_mean  = rand_uniform(0.0,1.0) < 0.77 ? 0.0458 : 0.0650;
@@ -234,37 +736,142 @@ box_label *read_boxes(char *filename, int *n)
 //                float h_mean  = rand_uniform(0.0,1.0) < 0.83 ? 0.0563 : 0.0750;
 //                float h_sigma = rand_uniform(0.0,1.0) < 0.83 ? 0.0086 : 0.0231;
 
+                if ((found == 0) || (k>2)){
+                    float w_mean, w_sigma, h_mean, h_sigma;
 
-                // CATS
-                float w_mean  = rand_uniform(0.0,1.0) < 0.5 ? 0.30154066 : 0.70203963;
-                float w_sigma = rand_uniform(0.0,1.0) < 0.5 ? 0.14545548 : 0.17012213;
+                    // CATS
+                    float rchoice = rand_uniform(0.0,1.0);
 
-                float h_mean  = rand_uniform(0.0,1.0) < 0.45 ? 0.73561638 : 0.33726578;
-                float h_sigma = rand_uniform(0.0,1.0) < 0.45 ? 0.15512773 : 0.1515984;
+                    // COMMENTED FOR LINE
+    //                if(k == 0) {//
+                    if (rchoice <= 0.14){
+                        w_mean  = 0.90345060;
+                        w_sigma = 0.07337541;
+    //                } else if(k == 1) {//
+                    } else if(rchoice <= 0.14 + 0.24){
+                        w_mean  = 0.33841927;
+                        w_sigma = 0.06655083;
+    //                } else if(k == 2) {//
+                    } else if(rchoice <= 0.14 + 0.24 + 0.24){
+                        w_mean  = 0.53097841;
+                        w_sigma = 0.06339136;
+    //                } else if(k == 3) {//
+                    } else if(rchoice <= 0.14 + 0.24 + 0.24 + 0.19){
+                        w_mean  = 0.15403800;
+                        w_sigma = 0.06314394;
+                    } else {
+                        w_mean  = 0.71370775;
+                        w_sigma = 0.07393066;
+                    }
 
-                float aw = normalRandom(w_mean, w_sigma);
-                float ah = normalRandom(h_mean, h_sigma);
+                    rchoice = rand_uniform(0.0,1.0);
 
-                if((aw > 0.001f) && (ah > 0.001f) && (aw < 1.0f) && (aw < 1.0f) )
-                {
-                    w = aw;
-                    h = ah;
+
+
+    //                if(k == 0) {
+                    if (rchoice <= 0.26){
+                        h_mean  = 0.37059904;
+                        h_sigma = 0.07318859;
+    //                } else if(k == 1) {//
+                    } else if(rchoice <= 0.26 + 0.14){
+                        h_mean  = 0.91193431;
+                        h_sigma = 0.05726497;
+    //                } else if(k == 2) {//
+                    } else if(rchoice <= 0.26 + 0.14 + 0.19){
+                        h_mean  = 0.17784346;
+                        h_sigma = 0.07353469;
+    //                } else if(k == 3) {//
+                    } else if(rchoice <= 0.26 + 0.14 + 0.19 + 0.17){
+                        h_mean  = 0.73067816;
+                        h_sigma = 0.06698147;
+                    } else {
+                        h_mean  = 0.54875299;
+                        h_sigma = 0.07111660;
+                    }
+
+
+    //                float w_mean  = rand_uniform(0.0,1.0) < 0.5 ? 0.30154066 : 0.70203963;
+    //                float w_sigma = rand_uniform(0.0,1.0) < 0.5 ? 0.14545548 : 0.17012213;
+
+    //                float h_mean  = rand_uniform(0.0,1.0) < 0.45 ? 0.73561638 : 0.33726578;
+    //                float h_sigma = rand_uniform(0.0,1.0) < 0.45 ? 0.15512773 : 0.1515984;
+
+                    float aw = normalRandom(w_mean, w_sigma);
+                    float ah = normalRandom(h_mean, h_sigma);
+
+                    if((aw > 0.001f) && (aw < 1.0f))
+                    {
+                        w = aw;
+                    } else {
+                        rchoice = rand_uniform(0.0,1.0);
+
+                        if(k == 0) {//if (rchoice <= 0.14){
+                            w_mean  = 0.90345060;
+                        } else if(k == 1) {//if(rchoice <= 0.14 + 0.24){
+                            w_mean  = 0.33841927;
+                        } else if(k == 2) {//if(rchoice <= 0.14 + 0.24 + 0.24){
+                            w_mean  = 0.53097841;
+                        } else if(k == 3) {//if(rchoice <= 0.14 + 0.24 + 0.24 + 0.19){
+                            w_mean  = 0.15403800;
+                        } else {
+                            w_mean  = 0.71370775;
+                        }
+
+                        w = w_mean;
+                    }
+
+    // COMMENTED FOR LINE
+                    if ((ah > 0.001f)  && (aw < 1.0f) ){
+                        h = ah;
+                    }
+                    else {
+                        if(k == 0) {//if (rchoice <= 0.26){
+                            h_mean  = 0.37059904;
+                        } else if(k == 1) {//if(rchoice <= 0.26 + 0.14){
+                            h_mean  = 0.91193431;
+                        } else if(k == 2) {//if(rchoice <= 0.26 + 0.14 + 0.19){
+                            h_mean  = 0.17784346;
+                        } else if(k == 3) {//if(rchoice <= 0.26 + 0.14 + 0.19 + 0.17){
+                            h_mean  = 0.73067816;
+                        } else {
+                            h_mean  = 0.54875299;
+                        }
+
+                        h = h_mean;
+
+                        //                    h = 0.0563;
+    //                    w = 0.0458;
+                    }
+
+
+                    // Clamp values to the image limits
+                    w = (w > 2.0*x) ? 2.0*x : w;
+                    w = (w > 2.0*(1.0-x)) ? 2.0*(1.0-x) : w;
+    //                w = min(min(w, 2.0*x), 2.0*(1.0-x));
+
+    // COMMENTED FOR LINE
+                    h = (h > 2.0*y) ? 2.0*y : h;
+                    h = (h > 2.0*(1.0-y)) ? 2.0*(1.0-y) : h;
+    ////                h = min(min(h, 2.0*y), 2.0*(1.0-y));
+
+    //                printf("VALUE RAND: %f %f %f %f %s %d\n", x,y, w,h, filename, img_hash);
                 }
-                else {
-                    h = 0.33726578;
-                    w = 0.30154066;
-                    //                    h = 0.0563;
-//                    w = 0.0458;
-                }
-
-//                printf("VALUE RAND: %f %f %f %f %s\n", x,y, w,h, filename);
 
                 boxes = (box_label*)xrealloc(boxes, (count + 1) * sizeof(box_label));
-                boxes[count].track_id = count + img_hash;
+//                boxes[count].track_id = count + img_hash;
+                boxes[count].track_id = img_number; //k*1000000 + label_id*10000000 + img_number;
+                boxes[count].sample_id = (uint8_t)k;
+                boxes[count].label_id = (uint8_t)label_id;
                 //printf(" boxes[count].track_id = %d, count = %d \n", boxes[count].track_id, count);
                 boxes[count].id = id;
                 boxes[count].x = x;
                 boxes[count].y = y;
+
+                w = 2*fminf(x, 1-x);
+                h = 2*fminf(y, 1-y);
+
+                w=0.05f;
+                h=0.05f;
 
                 boxes[count].h = h;
                 boxes[count].w = w;
@@ -274,13 +881,60 @@ box_label *read_boxes(char *filename, int *n)
                 boxes[count].bottom = y + h/2;
                 ++count;
 
+                fprintf(finit, "%d %.7f %.7f %.7f %.7f\n", id, x, y, w, h);
 
+                float h_min, w_min, h_max, w_max, iou;
+
+                w_max = w > w2 ? w:w2;
+                h_max = h > h2 ? h:h2;
+
+                w_min = w < w2 ? w:w2;
+                h_min = h < h2 ? h:h2;
+
+                iou = (w_min*h_min)/(w_max*h_max);
+
+//                printf("GEN %f %f %f %f : %f\n", x,y,w,h, iou);
+
+                if (iou > most_iou) {
+                    h_final = h;
+                    w_final = w;
+                    most_iou = iou;
+                }
             }
+
+//            printf("FINAL %f %f %f %f\n", x,y,w_final,h_final);
+
+//            if(most_iou > 0.80) {
+//                h = h_final;
+//                w = w_final;
+
+//                boxes = (box_label*)xrealloc(boxes, (count + 1) * sizeof(box_label));
+//                boxes[count].track_id = count + img_hash;
+//                //printf(" boxes[count].track_id = %d, count = %d \n", boxes[count].track_id, count);
+//                boxes[count].id = id;
+//                boxes[count].x = x;
+//                boxes[count].y = y;
+
+//                boxes[count].h = h;
+//                boxes[count].w = w;
+//                boxes[count].left   = x - w/2;
+//                boxes[count].right  = x + w/2;
+//                boxes[count].top    = y - h/2;
+//                boxes[count].bottom = y + h/2;
+//                ++count;
+//            }
+
+            fclose(file2);
+            fclose(finit);
+
         }
         else {
 //            printf("FULLY ANNO %s\n", filename);
             boxes = (box_label*)xrealloc(boxes, (count + 1) * sizeof(box_label));
-            boxes[count].track_id = count + img_hash;
+//            boxes[count].track_id = count + img_hash;
+            boxes[count].track_id = img_number;//label_id*10000000 + img_number;
+            boxes[count].sample_id = 0;
+            boxes[count].label_id = (uint8_t)label_id;
             //printf(" boxes[count].track_id = %d, count = %d \n", boxes[count].track_id, count);
             boxes[count].id = id;
             boxes[count].x = x;
@@ -295,9 +949,16 @@ box_label *read_boxes(char *filename, int *n)
             ++count;
         }
 
+        label_id++;
+
     }
     fclose(file);
     *n = count;
+    free(filename2);
+    free(filename3);
+    free(filename4);
+//    free(img_name);
+//    free(path);
     return boxes;
 }
 
@@ -455,6 +1116,19 @@ int fill_truth_detection(const char *path, int num_boxes, int truth_size, float 
     int id;
     int sub = 0;
 
+    int img_id = boxes[0].track_id;
+//    char* fname_init;
+//    fname_init = (char*)malloc(100*sizeof (char));
+//    sprintf(fname_init, "/home/fazevedo/Desktop/PhD/COCOPerson/labels/train/%012d_scale.txt", img_id);
+
+//    FILE* finit = fopen(fname_init, "w");
+
+
+    int prev_track = 0;
+    char* prev_file;
+    prev_file = (char*)malloc(100*sizeof (char));
+    prev_file[0] = '\0';
+
     for (i = 0; i < count; ++i) {
         x = boxes[i].x;
         y = boxes[i].y;
@@ -519,13 +1193,116 @@ int fill_truth_detection(const char *path, int num_boxes, int truth_size, float 
         truth[(i-sub)*truth_size +2] = w;
         truth[(i-sub)*truth_size +3] = h;
         truth[(i-sub)*truth_size +4] = id;
-        truth[(i-sub)*truth_size +5] = track_id;
-        //float val = track_id;
-        //printf(" i = %d, sub = %d, truth_size = %d, track_id = %d, %f, %f\n", i, sub, truth_size, track_id, truth[(i - sub)*truth_size + 5], val);
+        int val = track_id;
+//        int val = track_id + boxes[i].label_id*10000000 + boxes[i].sample_id*1000000;
+//        int val = track_id + boxes[i].label_id*10000000 + boxes[i].sample_id*1000000;
+//        truth[(i-sub)*truth_size +5] = *(float*)(&val);
+        truth[(i-sub)*truth_size +5] = (float)track_id;
+
+        printf("\nSCALE TRACKID %d\n\n", track_id);
+//        truth[(i-sub)*truth_size +5] = track_id + boxes[i].label_id*10000000.0f + boxes[i].sample_id*1000000.0f;
+//        double val = 1.0*track_id;
+        printf(" i = %d, sub = %d, truth_size = %d, track_id = %d, %f, %d, %d\n", i, sub, truth_size, track_id, truth[(i - sub)*truth_size + 5], val, (int)truth[(i - sub)*truth_size + 5]);
 
         if (min_w_h == 0) min_w_h = w*net_w;
         if (min_w_h > w*net_w) min_w_h = w*net_w;
         if (min_w_h > h*net_h) min_w_h = h*net_h;
+
+        char* fname_hash;
+        fname_hash = (char*)malloc(100*sizeof (char));
+
+        sprintf(fname_hash, "hash/%d.txt", track_id);
+
+        char* current_file;
+        current_file = (char*)malloc(100*sizeof (char));
+
+        if( access( fname_hash, F_OK ) == 0 ) {
+            FILE* fhash = fopen(fname_hash, "r");
+            int sid, lid;
+            fscanf(fhash, "%d %d %s\n", &sid, &lid, current_file);
+            fclose(fhash);
+        }
+
+//        if (prev_track != track_id) {
+//            prev_track = track_id;
+//        printf("SCALE P:%s C:%s\n", prev_file, current_file);
+
+        if (strcmp(prev_file, current_file) != 0) {
+//            printf("SCALE WRITING P:%s C:%s\n", prev_file, current_file);
+            sprintf(prev_file, "%s", current_file);
+//            printf("SCALE WRITING\n");
+
+//            char* fname_hash;
+//            fname_hash = (char*)malloc(100*sizeof (char));
+
+//            sprintf(fname_hash, "hash/%d.txt", track_id);
+            if( access( fname_hash, F_OK ) == 0 ) {
+                FILE* fhash = fopen(fname_hash, "r");
+                int sid, lid;
+                char* fname_base = (char*)malloc(100*sizeof(char));
+                if(fscanf(fhash, "%d %d %s\n", &sid, &lid, fname_base) == 3) {
+                    char* fname_scale;
+                    fname_scale = (char*)malloc(100*sizeof (char));
+                    sprintf(fname_scale, "%s_scale.txt", fname_base);
+
+
+                    FILE* fscale = fopen(fname_scale, "w");
+//                    while(flock(fscale,LOCK_EX) == -1) {
+//                        sleep(0.1);
+//                    }
+                    fprintf(fscale, "%d %.7f %.7f %.7f %.7f %d\n", 0, dx, dy, sx, sy, flip); // First element to check if already read in other end
+                    fclose(fscale);
+
+//                    if( access( fname_scale, F_OK ) != 0 ) {
+//                        FILE* fscale = fopen(fname_scale, "w");
+//                        fprintf(fscale, "%d %.7f %.7f %.7f %.7f %d\n", 0, dx, dy, sx, sy, flip); // First element to check if already read in other end
+//                        fclose(fscale);
+//                    } else {
+//                        int iter = 0;
+//                        while(1) {
+////                            char* fname_scale2 = (char*)malloc(100*sizeof (char));
+////                            sprintf(fname_scale2, "%s_scale.txt", fname_base);
+
+//                            FILE* fscale = fopen(fname_scale, "r");
+//                            int read, f;
+//                            float rdx,rdy, rsx, rsy;
+//                            fscanf(fscale, "%d %f %f %f %f %d\n", &read, &rdx, &rdy, &rsx, &rsy, &f);
+//                            fclose(fscale);
+
+//                            if (read) { //Already processed
+//                                FILE* fscale = fopen(fname_scale, "w");
+//                                fprintf(fscale, "%d %.7f %.7f %.7f %.7f %d\n", 0, dx, dy, sx, sy, flip); // First element to check if already read in other end
+//                                fclose(fscale);
+//                                break;
+//                            }
+
+//                            printf("NEW SCALE WITHOUT READ!\n");
+//                            sleep(1);
+//                            exit(0);
+//                        }
+//                    }
+
+                    free(fname_scale);
+                }
+
+                free(fname_base);
+                fclose(fhash);
+            } else {
+                printf("NO FILE SCALE FOUND\n");
+                exit(0);
+            }
+
+            free(fname_hash);
+//            char* fname_init;
+//            fname_init = (char*)malloc(100*sizeof (char));
+//            sprintf(fname_init, "/home/fazevedo/Desktop/PhD/COCOPerson/labels/train/%012d_scale.txt", boxes[i].track_id);
+
+//            FILE* finit = fopen(fname_init, "w");
+//            fprintf(finit, "%.7f %.7f %.7f %.7f %d\n", dx, dy, sx, sy, flip);
+//            fclose(finit);
+//            free(fname_init);
+        }
+        free(current_file);
     }
     free(boxes);
     return min_w_h;
@@ -1658,8 +2435,11 @@ void *load_thread(void *ptr)
     } else if (a.type == REGION_DATA){
         *a.d = load_data_region(a.n, a.paths, a.m, a.w, a.h, a.num_boxes, a.classes, a.jitter, a.hue, a.saturation, a.exposure);
     } else if (a.type == DETECTION_DATA){
+//        FILE* fcurr = fopen("current_batch.txt", "w");
+//        fclose(fcurr);
         *a.d = load_data_detection(a.n, a.paths, a.m, a.w, a.h, a.c, a.num_boxes, a.truth_size, a.classes, a.flip, a.gaussian_noise, a.blur, a.mixup, a.jitter, a.resize,
             a.hue, a.saturation, a.exposure, a.mini_batch, a.track, a.augment_speed, a.letter_box, a.mosaic_bound, a.contrastive, a.contrastive_jit_flip, a.contrastive_color, a.show_imgs);
+
     } else if (a.type == SWAG_DATA){
         *a.d = load_data_swag(a.paths, a.n, a.classes, a.jitter);
     } else if (a.type == COMPARE_DATA){
